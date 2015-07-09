@@ -1,10 +1,12 @@
 package fr.vergne.ai;
 
-public interface Sensor<T> {
+public interface Sensor<Value> {
 
-	public static interface SensorListener<T> {
-		public void sensing(T value);
+	public static interface SensorListener<Value> {
+		public void sensing(Value value);
 	}
-	
-	public void registerListener(SensorListener<T> listener);
+
+	public void addSensorListener(SensorListener<Value> listener);
+
+	public void removeSensorListener(SensorListener<Value> listener);
 }

@@ -1,6 +1,7 @@
 package fr.vergne.ai;
 
-public interface Actuator<T> {
+public interface Actuator {
 
-	public void act(T value);
+	public void act();
+	
 }

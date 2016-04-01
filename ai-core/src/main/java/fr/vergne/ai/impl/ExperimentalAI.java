@@ -1,7 +1,9 @@
 package fr.vergne.ai.impl;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 
 import fr.vergne.ai.Actuator;
 import fr.vergne.ai.ArtificialIntelligence;
@@ -12,6 +14,7 @@ import fr.vergne.ai.SensorMemory;
 public class ExperimentalAI implements ArtificialIntelligence {
 
 	private final Collection<SensorMemory<?>> sensorMemories = new HashSet<SensorMemory<?>>();
+	private final Map<Sensor<?>, Object> objectives = new HashMap<Sensor<?>, Object>();
 	private final Collection<Actuator> actuators = new HashSet<Actuator>();
 
 	public <Value> void addSensor(final Sensor<Value> sensor) {
@@ -40,10 +43,22 @@ public class ExperimentalAI implements ArtificialIntelligence {
 				sensor.removeSensorListener(this);
 			}
 		});
+
+		objectives.put(sensor, null);
 	}
 
 	public void addActuator(Actuator actuator) {
 		actuators.add(actuator);
+	}
+
+	@Override
+	public <Value> void setObjective(Sensor<Value> sensor, Value objective) {
+		if (objectives.containsKey(sensor)) {
+			objectives.put(sensor, objective);
+		} else {
+			throw new IllegalArgumentException("Unkown sensor " + sensor
+					+ ", add it first.");
+		}
 	}
 
 	public void run() {
@@ -53,7 +68,7 @@ public class ExperimentalAI implements ArtificialIntelligence {
 		// sensors)
 		// TODO setup learning:
 		// http://www-igm.univ-mlv.fr/~dr/XPOSE2002/Neurones/index.php?rubrique=Apprentissage
-		// TODO main loop
+		// TODO main loop (learn + satisfy objectives)
 	}
 
 }

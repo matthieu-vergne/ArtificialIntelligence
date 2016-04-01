@@ -7,8 +7,21 @@ import java.util.LinkedList;
 import org.junit.Test;
 
 import fr.vergne.ai.Sensor.SensorListener;
+import fr.vergne.ai.Sensor;
+import fr.vergne.ai.SensorTest;
 
-public class ManualSensorTest {
+public class ManualSensorTest extends SensorTest<Object> {
+	
+	@Override
+	protected Sensor<Object> generateSensor() {
+		return new ManualSensor<Object>();
+	}
+	
+	@Override
+	protected void waitSensing(Sensor<Object> sensor) {
+		ManualSensor<Object> s = (ManualSensor<Object>) sensor;
+		s.push(new Object());
+	}
 
 	@Test
 	public void testPushProperlyNotifiesAddedListeners() {

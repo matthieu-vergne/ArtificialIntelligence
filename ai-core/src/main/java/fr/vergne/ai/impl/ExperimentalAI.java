@@ -7,21 +7,22 @@ import fr.vergne.ai.Actuator;
 import fr.vergne.ai.ArtificialIntelligence;
 import fr.vergne.ai.Sensor;
 import fr.vergne.ai.Sensor.SensorListener;
+import fr.vergne.ai.SensorMemory;
 
 public class ExperimentalAI implements ArtificialIntelligence {
 
-	private final Collection<SensorDescriptor<?>> sensorDescriptors = new HashSet<SensorDescriptor<?>>();
+	private final Collection<SensorMemory<?>> sensorMemories = new HashSet<SensorMemory<?>>();
 	private final Collection<Actuator> actuators = new HashSet<Actuator>();
 
 	public <Value> void addSensor(final Sensor<Value> sensor) {
-		SensorDescriptor<Value> descriptor = new SensorDescriptor<Value>(sensor);
-		sensorDescriptors.add(descriptor);
-		
+		final SensorMemory<Value> memory = new SimpleSensorMemory<Value>(1000);
+		sensorMemories.add(memory);
+
 		sensor.addSensorListener(new SensorListener<Value>() {
 
 			@Override
 			public void sensing(Value value) {
-				// TODO exploit value
+				memory.add(value);
 			}
 		});
 

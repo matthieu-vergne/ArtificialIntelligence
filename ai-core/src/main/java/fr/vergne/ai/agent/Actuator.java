@@ -1,4 +1,4 @@
-package fr.vergne.ai;
+package fr.vergne.ai.agent;
 
 public interface Actuator {
 

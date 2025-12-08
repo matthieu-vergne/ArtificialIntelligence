@@ -1,13 +1,25 @@
 package fr.vergne.ai.impl;
 
-import fr.vergne.ai.ArtificialIntelligence;
-import fr.vergne.ai.ArtificialIntelligenceTest;
+import static org.junit.jupiter.api.Assertions.fail;
 
-public class ExperimentalAITest extends ArtificialIntelligenceTest {
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
+
+import fr.vergne.ai.AgentTest;
+import fr.vergne.ai.agent.Agent;
+import fr.vergne.ai.agent.impl.ExperimentalAI;
+
+public class ExperimentalAITest implements AgentTest {
 
 	@Override
-	protected ArtificialIntelligence generateAI() {
+	public Agent createAgent() {
 		return new ExperimentalAI();
+	}
+
+	@Test
+	@Disabled
+	public void testXxx() {
+		fail("Not yet implemented");
 	}
 
 }

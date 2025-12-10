@@ -2,7 +2,12 @@ package fr.vergne.ai.neuralnet;
 
 import static java.util.stream.Collectors.toMap;
 
+import java.awt.Color;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
 import java.awt.GridLayout;
+import java.awt.Paint;
+import java.awt.event.ActionEvent;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -31,18 +36,31 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import javax.imageio.ImageIO;
+import javax.swing.AbstractAction;
 import javax.swing.ImageIcon;
+import javax.swing.JButton;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTextField;
 
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartFrame;
 import org.jfree.chart.ChartPanel;
 import org.jfree.chart.JFreeChart;
+import org.jfree.chart.axis.ValueAxis;
 import org.jfree.chart.plot.PlotOrientation;
+import org.jfree.chart.plot.XYPlot;
+import org.jfree.chart.renderer.LookupPaintScale;
+import org.jfree.chart.renderer.xy.XYBlockRenderer;
+import org.jfree.chart.renderer.xy.XYItemRenderer;
+import org.jfree.data.DomainOrder;
+import org.jfree.data.general.DatasetChangeListener;
+import org.jfree.data.general.DatasetGroup;
 import org.jfree.data.xy.XYSeries;
 import org.jfree.data.xy.XYSeriesCollection;
+import org.jfree.data.xy.XYZDataset;
 
 public class NeuralNet {
 
@@ -51,10 +69,13 @@ public class NeuralNet {
 				(operands) -> {
 					throw new RuntimeException("Should not be called");
 				}, //
-				(parentGradient, operands) -> {
+				(parentGradient, operands) ->
+
+				{
 					restrict(operands, 0);// Nothing to resolve
 				}//
 		), //
+
 		PLUS("+", //
 				(operands) -> operands.stream().mapToDouble(d -> d).sum(), //
 				(parentGradient, operands) -> {
@@ -368,24 +389,105 @@ public class NeuralNet {
 	public static void main(String[] args) {
 		if (true) {
 			Random random = new Random(0);
-			MLP mlp = new MLP(ParameterNamer.create(), 3, List.of(4, 4, 1), (label) -> random.nextDouble(-1.0, 1.0));
+			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(4, 4, 1), (label) -> random.nextDouble(-1.0, 1.0));
 			Map<List<Double>, Double> dataset = new LinkedHashMap<>();
-			dataset.put(List.of(2.0, 3.0, -1.0), 1.0);
-			dataset.put(List.of(3.0, -1.0, 0.5), -1.0);
-			dataset.put(List.of(0.5, 1.0, 1.0), -1.0);
-			dataset.put(List.of(1.0, 1.0, -1.0), 1.0);
+			for (int i = 0; i < 100; i++) {
+				double x = random.nextDouble(-5, 5);
+				double y = random.nextDouble(-5, 5);
+				double value = Math.signum(y - x * x + 3);
+				dataset.put(List.of(x, y), value);
+			}
 
-			Value loss = null;
-			for (int i = 0; i < 20; i++) {
-				loss = mlp.computeLoss(dataset);
-				System.out.println("Loss = " + loss.data().get());
+			AtomicInteger roundCounter = new AtomicInteger();
+			AtomicReference<Double> updateStep = new AtomicReference<Double>(0.1);
+			Runnable mlpRound = () -> {
+				int round = roundCounter.incrementAndGet();
+				Value loss = mlp.computeLoss(dataset);
+				System.out.println("Loss " + round + " = " + loss.data().get());
 				loss.backward();
-				mlp.updateParameters(0.5);
-			}
+				mlp.updateParameters(updateStep.get());
+			};
 
-			if (loss != null) {
-				graph(loss);
-			}
+			// Get Xs from the first item of each dataset key
+			Function<Double, SeriesDefinition> seriesFactory = value -> {
+				List<Double> xs = dataset.entrySet().stream().filter(entry -> entry.getValue().equals(value))
+						.map(Entry::getKey).map(list -> list.get(0)).toList();
+				List<Double> ys = dataset.entrySet().stream().filter(entry -> entry.getValue().equals(value))
+						.map(Entry::getKey).map(list -> list.get(1)).toList();
+				return new SeriesDefinition(xs, ys, "" + value);
+			};
+			XYSeries positiveSeries = createSeries(seriesFactory.apply(1.0));
+			XYSeries negativeSeries = createSeries(seriesFactory.apply(-1.0));
+			Color positiveColor = Color.RED;
+			Color negativeColor = Color.BLUE;
+			Color boundaryColor = Color.BLACK;
+			BinaryOperator<Double> contourFunction = (x, y) -> mlp.computeRaw(List.of(x, y)).get(0).data().get();
+			double boundaryRange = 0.1;
+			Function<Double, Paint> contourPainter = (z) -> {
+				if (z < -boundaryRange / 2) {
+					return transparent(negativeColor);
+				} else if (z > boundaryRange / 2) {
+					return transparent(positiveColor);
+				} else {
+					return transparent(boundaryColor);
+				}
+			};
+
+			Map<XYSeries, Color> coloredSeries = Map.of(//
+					positiveSeries, positiveColor, //
+					negativeSeries, negativeColor//
+			);
+			Resolution contourResolution = new Resolution(100, 100);
+
+			ChartPanel chartPanel = createChartPanel(coloredSeries, contourFunction, contourPainter, contourResolution);
+
+			JTextField roundField = new JTextField("1");
+			JTextField stepField = new JTextField("" + updateStep.get());
+
+			JButton runButton = new JButton();
+
+			AbstractAction runAction = new AbstractAction("Run") {
+
+				@Override
+				public void actionPerformed(ActionEvent e) {
+					runButton.setEnabled(false);
+					updateStep.set(Double.parseDouble(stepField.getText()));
+					int rounds = Integer.parseInt(roundField.getText());
+					IntStream.range(0, rounds).forEach(i -> {
+						mlpRound.run();
+						chartPanel.getChart().fireChartChanged();
+						chartPanel.repaint();
+					});
+					runButton.setEnabled(true);
+				}
+			};
+			runButton.setAction(runAction);
+
+			JPanel runPanel = new JPanel();
+			runPanel.setLayout(new GridLayout(1, 3));
+			runPanel.add(runButton);
+			runPanel.add(roundField);
+			runPanel.add(stepField);
+
+			JFrame frame = new JFrame("MLP");
+			frame.setLayout(new GridBagLayout());
+			GridBagConstraints constraints = new GridBagConstraints();
+			constraints.gridx = 0;
+			constraints.gridy = 0;
+			constraints.weightx = 1.0;
+			constraints.weighty = 1.0;
+			constraints.fill = GridBagConstraints.BOTH;
+			frame.add(chartPanel, constraints);
+			constraints.gridy++;
+			constraints.weightx = 1.0;
+			constraints.weighty = 0.0;
+			constraints.fill = GridBagConstraints.NONE;
+			frame.add(runPanel, constraints);
+
+			frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+			frame.pack();
+			frame.setSize(800, 600);
+			frame.setVisible(true);
 		} else {
 			List<Double> xs = range(-5, 5, 0.25).toList();
 			Function<Double, Double> f = Math::tanh;
@@ -394,6 +496,72 @@ public class NeuralNet {
 			SeriesDefinition sg = new SeriesDefinition(xs, xs.stream().map(g).toList(), "tanh'");
 			plot(List.of(sf, sg), "x", "y", "tanh", "tanh", X.INTEGRATED);
 		}
+	}
+
+	private static ChartPanel createChartPanel(Map<XYSeries, Color> coloredSeries,
+			BinaryOperator<Double> contourFunction, Function<Double, Paint> contourPainter,
+			Resolution contourResolution) {
+		XYSeriesCollection chartDataset = new XYSeriesCollection();
+		coloredSeries.keySet().forEach(chartDataset::addSeries);
+
+		JFreeChart chart = ChartFactory.createScatterPlot("MLP", // Title
+				"x", // X-axis label
+				"y", // Y-axis label
+				chartDataset, // Dataset
+				PlotOrientation.VERTICAL, // Orientation
+				true, // Include legend
+				true, // Tooltips
+				false // URLs
+		);
+
+		XYPlot plot = (XYPlot) chart.getPlot();
+
+		XYItemRenderer renderer = plot.getRenderer();
+		coloredSeries.forEach((series, color) -> {
+			int seriesIndex = chartDataset.getSeriesIndex(series.getKey());
+			renderer.setSeriesPaint(seriesIndex, color);
+		});
+
+		addContour(plot, contourResolution, contourFunction, contourPainter);
+
+		return new ChartPanel(chart);
+	}
+
+	private static Color transparent(Color red) {
+		return new Color(red.getRed(), red.getGreen(), red.getBlue(), 1);
+	}
+
+	record Resolution(int x, int y) {
+	}
+
+	private static void addContour(XYPlot plot, Resolution resolution, BinaryOperator<Double> zFunction,
+			Function<Double, Paint> zPainter) {
+		ContourDimension dimX = createContourDimension(plot.getDomainAxis(), resolution.x());
+		ContourDimension dimY = createContourDimension(plot.getRangeAxis(), resolution.y());
+		XYZDataset contourDataset = createContourDataset(dimX, dimY, zFunction);
+
+		XYBlockRenderer contourRenderer = createContourRenderer(zPainter);
+
+		int newIndex = plot.getDatasetCount();
+		plot.setDataset(newIndex, contourDataset);
+		plot.setRenderer(newIndex, contourRenderer);
+	}
+
+	private static ContourDimension createContourDimension(ValueAxis domainAxis, int resolutionX) {
+		double minX = domainAxis.getLowerBound();
+		double maxX = domainAxis.getUpperBound();
+		return new ContourDimension(minX, maxX, resolutionX);
+	}
+
+	private static XYBlockRenderer createContourRenderer(Function<Double, Paint> zPainter) {
+		XYBlockRenderer contourRenderer = new XYBlockRenderer();
+		contourRenderer.setPaintScale(new LookupPaintScale() {
+			@Override
+			public Paint getPaint(double value) {
+				return zPainter.apply(value);
+			}
+		});
+		return contourRenderer;
 	}
 
 	private static void graph(Value L) {
@@ -634,5 +802,96 @@ public class NeuralNet {
 		default public ParameterNamer atBias() {
 			return append("B");
 		}
+	}
+
+	record ContourDimension(double min, double max, int resolution) {
+	}
+
+	private static XYZDataset createContourDataset(ContourDimension dimX, ContourDimension dimY,
+			BinaryOperator<Double> zFunction) {
+		return new XYZDataset() {
+			@Override
+			public int getSeriesCount() {
+				return 1;
+			}
+
+			@Override
+			public int getItemCount(int series) {
+				return dimX.resolution() * dimY.resolution();
+			}
+
+			@Override
+			public double getXValue(int series, int item) {
+				int xItem = item % dimX.resolution();
+				double xUnit = (double) xItem / dimX.resolution();
+				double x = xUnit * (dimX.max() - dimX.min()) + dimX.min();
+				return x;
+			}
+
+			@Override
+			public double getYValue(int series, int item) {
+				int yItem = (item / dimX.resolution()) % dimY.resolution();
+				double yUnit = (double) yItem / dimX.resolution();
+				double y = yUnit * (dimY.max() - dimY.min()) + dimY.min();
+				return y;
+			}
+
+			@Override
+			public double getZValue(int series, int item) {
+				double x = getXValue(series, item);
+				double y = getYValue(series, item);
+				return zFunction.apply(x, y);
+			}
+
+			@Override
+			public Number getX(int series, int item) {
+				return getXValue(series, item);
+			}
+
+			@Override
+			public Number getY(int series, int item) {
+				return getYValue(series, item);
+			}
+
+			@Override
+			public Number getZ(int series, int item) {
+				return getZValue(series, item);
+			}
+
+			@Override
+			public void addChangeListener(DatasetChangeListener listener) {
+				// ignore - this dataset never changes
+			}
+
+			@Override
+			public void removeChangeListener(DatasetChangeListener listener) {
+				// ignore
+			}
+
+			@Override
+			public DatasetGroup getGroup() {
+				return null;
+			}
+
+			@Override
+			public void setGroup(DatasetGroup group) {
+				// ignore
+			}
+
+			@Override
+			public Comparable getSeriesKey(int series) {
+				return "sin(sqrt(x + y))";
+			}
+
+			@Override
+			public int indexOf(Comparable seriesKey) {
+				return 0;
+			}
+
+			@Override
+			public DomainOrder getDomainOrder() {
+				return DomainOrder.ASCENDING;
+			}
+		};
 	}
 }

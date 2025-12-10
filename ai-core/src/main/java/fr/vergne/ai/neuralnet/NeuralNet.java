@@ -72,8 +72,6 @@ import org.jfree.data.xy.XYZDataset;
 
 public class NeuralNet {
 
-	private static final int NO_ROUNDS_LIMIT = -1;
-
 	enum Operator {
 		NONE(null, //
 				(operands) -> {
@@ -247,7 +245,7 @@ public class NeuralNet {
 		}
 
 		public Value div(Value that) {
-			return mult(that.pow(NO_ROUNDS_LIMIT));
+			return mult(that.pow(-1));
 		}
 
 		public Value div(double value) {
@@ -404,7 +402,8 @@ public class NeuralNet {
 			for (int i = 0; i < 100; i++) {
 				double x = random.nextDouble(-5, 5);
 				double y = random.nextDouble(-5, 5);
-				double value = Math.signum(y - polynom(x, List.of(-2.0, 5.0, 4.0, -3.0)));
+//				double value = Math.signum(y - polynom(x, List.of(-2.0, 5.0, 4.0, -3.0)));
+				double value = Math.signum(Math.sqrt(x * x + y * y) - 3);
 				dataset.put(List.of(x, y), value);
 			}
 
@@ -418,9 +417,9 @@ public class NeuralNet {
 				mlp.updateParameters(updateStep.get());
 			};
 
-			AtomicInteger roundLimit = new AtomicInteger(1000);
+			AtomicReference<Optional<Integer>> roundsLimit = new AtomicReference<>(Optional.empty());
 			AtomicInteger batchSize = new AtomicInteger(1);
-			RunConf runConf = new RunConf(roundLimit, batchSize, updateStep);
+			RunConf runConf = new RunConf(roundsLimit, batchSize, updateStep);
 
 			double boundaryRange = 0.1;
 			Collection<ChartDatasetConf> datasetConfs = List.of(//
@@ -455,21 +454,21 @@ public class NeuralNet {
 	private static void createFrame(FrameConf frameConf, Map<List<Double>, Double> dataset, Runnable mlpRound) {
 		ChartPanel chartPanel = createChartPanel(frameConf.chartConf(), dataset);
 
-		JTextField roundsLimitField = new JTextField("" + frameConf.runConf().roundsLimit().get());
+		JTextField roundsLimitField = new JTextField(frameConf.runConf().roundsLimit().get().map(Object::toString).orElse(""));
 		{
 			Color defaultBackground2 = roundsLimitField.getBackground();
 			registerTextUpdater(roundsLimitField, () -> {
 				roundsLimitField.setBackground(defaultBackground2);
 				String text2 = roundsLimitField.getText();
 				if (text2.isEmpty()) {
-					frameConf.runConf().roundsLimit().set(NO_ROUNDS_LIMIT);
+					frameConf.runConf().roundsLimit().set(Optional.empty());
 				} else {
-					int value1 = Integer.parseInt(text2);
-					if (value1 <= 0) {
+					int value = Integer.parseInt(text2);
+					if (value <= 0) {
 						// Set text field background color to red to indicate error
 						roundsLimitField.setBackground(Color.RED);
 					} else {
-						frameConf.runConf().roundsLimit().set(value1);
+						frameConf.runConf().roundsLimit().set(Optional.of(value));
 					}
 				}
 			});
@@ -526,31 +525,52 @@ public class NeuralNet {
 				if (!runButton.isSelected()) {
 					// Wait for the stuff to stop
 				} else {
-					// Snapshot the current number of rounds to not let it evolve during the run
-					// We have the toggle to stop the run explicitly
-					var ctx = new Object() {
-						int rounds = frameConf.runConf().roundsLimit().get();
-					};
-					SwingUtilities.invokeLater(new Runnable() {
-						@Override
-						public void run() {
-							if (!runButton.isSelected()) {
-								// Don't request any more run
-							} else if (ctx.rounds == 0) {
-								// Untoggle automatically
-								runButton.setSelected(false);
-							} else {
-								int batchSize = Math.min(ctx.rounds, frameConf.runConf().batchSize().get());
-								for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
-									mlpRound.run();
-									ctx.rounds--;
+					Optional<Integer> roundsLimit = frameConf.runConf().roundsLimit().get();
+					if (roundsLimit.isEmpty()) {
+						SwingUtilities.invokeLater(new Runnable() {
+							@Override
+							public void run() {
+								if (!runButton.isSelected()) {
+									// Don't request any more run
+								} else {
+									int batchSize = frameConf.runConf().batchSize().get();
+									for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
+										mlpRound.run();
+									}
+									chartPanel.getChart().fireChartChanged();
+									chartPanel.repaint();
+									SwingUtilities.invokeLater(this);
 								}
-								chartPanel.getChart().fireChartChanged();
-								chartPanel.repaint();
-								SwingUtilities.invokeLater(this);
 							}
-						}
-					});
+						});
+					} else {
+						// Snapshot the current number of rounds to not let it evolve during the run
+						// We have the toggle to stop the run explicitly
+						var ctx = new Object() {
+							// TODO Support empty case
+							int rounds = roundsLimit.get();
+						};
+						SwingUtilities.invokeLater(new Runnable() {
+							@Override
+							public void run() {
+								if (!runButton.isSelected()) {
+									// Don't request any more run
+								} else if (ctx.rounds == 0) {
+									// Untoggle automatically
+									runButton.setSelected(false);
+								} else {
+									int batchSize = Math.min(ctx.rounds, frameConf.runConf().batchSize().get());
+									for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
+										mlpRound.run();
+										ctx.rounds--;
+									}
+									chartPanel.getChart().fireChartChanged();
+									chartPanel.repaint();
+									SwingUtilities.invokeLater(this);
+								}
+							}
+						});
+					}
 				}
 			}
 		};
@@ -648,10 +668,9 @@ public class NeuralNet {
 
 	private static void addContour(ContourConf contourConf, XYPlot plot, Function<Double, Paint> contourPainter) {
 		XYBlockRenderer contourRenderer = createContourRenderer(contourPainter);
-		
+
 		XYZDataset contourDataset = createContourDataset(contourConf, plot);
-		
-		
+
 		int newIndex = plot.getDatasetCount();
 		plot.setDataset(newIndex, contourDataset);
 		plot.setRenderer(newIndex, contourRenderer);
@@ -680,7 +699,7 @@ public class NeuralNet {
 	}
 
 	record RunConf(//
-			AtomicInteger roundsLimit, //
+			AtomicReference<Optional<Integer>> roundsLimit, //
 			AtomicInteger batchSize, //
 			AtomicReference<Double> updateStep//
 	) {

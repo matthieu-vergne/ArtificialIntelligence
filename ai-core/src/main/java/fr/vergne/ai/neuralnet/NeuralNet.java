@@ -51,8 +51,6 @@ import javax.swing.JScrollPane;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
 import javax.swing.SwingUtilities;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
 
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartFrame;
@@ -550,26 +548,6 @@ public class NeuralNet {
 		frame.setVisible(true);
 	}
 
-	static <T> Runnable createTextUpdater(JTextField textField, Function<String, T> textToValue,
-			Predicate<T> valueChecker, Consumer<T> valueConsumer, Runnable noTextDefault,
-			Consumer<JTextField> noCheckConsumer) {
-		Color defaultBackground = textField.getBackground();
-		return () -> {
-			textField.setBackground(defaultBackground);
-			String text = textField.getText();
-			if (text.isEmpty()) {
-				noTextDefault.run();
-			} else {
-				T value = textToValue.apply(text);
-				if (valueChecker.test(value)) {
-					valueConsumer.accept(value);
-				} else {
-					noCheckConsumer.accept(textField);
-				}
-			}
-		};
-	}
-
 	private static AbstractAction createRunAction(FrameConf frameConf, Supplier<Value> mlpRound, ChartPanel chartPanel,
 			Consumer<Value> lossConsumer, JToggleButton runButton) {
 		return new AbstractAction("Run") {
@@ -742,26 +720,6 @@ public class NeuralNet {
 			RunConf runConf, //
 			ChartConf chartConf //
 	) {
-	}
-
-	static void registerTextUpdater(JTextField textField, Runnable updater) {
-		textField.getDocument().addDocumentListener(new DocumentListener() {
-
-			@Override
-			public void removeUpdate(DocumentEvent e) {
-				updater.run();
-			}
-
-			@Override
-			public void insertUpdate(DocumentEvent e) {
-				updater.run();
-			}
-
-			@Override
-			public void changedUpdate(DocumentEvent e) {
-				updater.run();
-			}
-		});
 	}
 
 	private static double polynom(double x, Iterable<Double> factors) {

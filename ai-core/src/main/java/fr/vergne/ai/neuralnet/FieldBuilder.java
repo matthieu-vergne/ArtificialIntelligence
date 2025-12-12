@@ -7,6 +7,8 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 
 import javax.swing.JTextField;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 
 interface FieldBuilder<T> {
 	static <T> FieldBuilder<T> buildFieldFor(T source) {
@@ -61,17 +63,40 @@ interface FieldBuilder<T> {
 									@Override
 									public JTextField build() {
 										JTextField textField = new JTextField(toText.apply(source));
+										Color defaultBackground = textField.getBackground();
 
-										Runnable textUpdater = NeuralNet.createTextUpdater(//
-												textField, //
-												textToValue, //
-												valueChecker, //
-												value -> valueConsumer.accept(source, value), //
-												() -> noTextDefault.accept(textField, source), //
-												noCheckDefault//
-										);
+										Runnable textUpdater = () -> {
+											textField.setBackground(defaultBackground);
+											String text = textField.getText();
+											if (text.isEmpty()) {
+												noTextDefault.accept(textField, source);
+											} else {
+												U value = textToValue.apply(text);
+												if (valueChecker.test(value)) {
+													valueConsumer.accept(source, value);
+												} else {
+													noCheckDefault.accept(textField);
+												}
+											}
+										};
 
-										NeuralNet.registerTextUpdater(textField, textUpdater);
+										textField.getDocument().addDocumentListener(new DocumentListener() {
+
+											@Override
+											public void removeUpdate(DocumentEvent e) {
+												textUpdater.run();
+											}
+
+											@Override
+											public void insertUpdate(DocumentEvent e) {
+												textUpdater.run();
+											}
+
+											@Override
+											public void changedUpdate(DocumentEvent e) {
+												textUpdater.run();
+											}
+										});
 
 										return textField;
 									}

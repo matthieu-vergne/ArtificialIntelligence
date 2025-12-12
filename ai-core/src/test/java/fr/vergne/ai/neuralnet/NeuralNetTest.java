@@ -128,10 +128,10 @@ class NeuralNetTest {
 		assertThat(loss.data().get(), is(closeTo(9.555022845608106e-5, epsilonLoss)));
 		
 		double epsilonOutput = 1e-2;
-		assertThat(mlp.computeRaw(x0).get(0).data().get(), is(closeTo(y0, epsilonOutput)));
-		assertThat(mlp.computeRaw(x1).get(0).data().get(), is(closeTo(y1, epsilonOutput)));
-		assertThat(mlp.computeRaw(x2).get(0).data().get(), is(closeTo(y2, epsilonOutput)));
-		assertThat(mlp.computeRaw(x3).get(0).data().get(), is(closeTo(y3, epsilonOutput)));
+		assertThat(mlp.computeRaw(x0).get(0), is(closeTo(y0, epsilonOutput)));
+		assertThat(mlp.computeRaw(x1).get(0), is(closeTo(y1, epsilonOutput)));
+		assertThat(mlp.computeRaw(x2).get(0), is(closeTo(y2, epsilonOutput)));
+		assertThat(mlp.computeRaw(x3).get(0), is(closeTo(y3, epsilonOutput)));
 		
 		// Only test the parameters of the first neuron, assuming the rest is as stable
 		double epsilonParameter = 1e-10;

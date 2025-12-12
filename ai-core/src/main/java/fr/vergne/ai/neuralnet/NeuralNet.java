@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.BinaryOperator;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -363,8 +364,9 @@ public class NeuralNet {
 			return layers.stream().reduce(x, (vector, layer) -> layer.compute(vector), noCombiner());
 		}
 
-		public List<Value> computeRaw(List<Double> x) {
-			return compute(x.stream().map(Value::of).toList());
+		public List<Double> computeRaw(List<Double> x) {
+			return compute(x.stream().map(Value::of).toList()).stream().map(Value::data).map(AtomicReference::get)
+					.toList();
 		}
 
 		public List<Value> parameters() {
@@ -373,7 +375,7 @@ public class NeuralNet {
 
 		public Value computeLoss(Map<List<Double>, Double> dataset) {
 			Map<Value, Double> results = dataset.entrySet().stream().collect(toMap(//
-					datapoint -> this.computeRaw(datapoint.getKey()).get(0), //
+					datapoint -> this.compute(datapoint.getKey().stream().map(Value::of).toList()).get(0), //
 					datapoint -> datapoint.getValue()//
 			));
 			Value loss = Value.of(0);
@@ -409,12 +411,13 @@ public class NeuralNet {
 
 			AtomicInteger roundCounter = new AtomicInteger();
 			AtomicReference<Double> updateStep = new AtomicReference<Double>(0.01);
-			Runnable mlpRound = () -> {
+			Supplier<Value> mlpRound = () -> {
 				int round = roundCounter.incrementAndGet();
 				Value loss = mlp.computeLoss(dataset);
 				System.out.println("Loss " + round + " = " + loss.data().get());
 				loss.backward();
 				mlp.updateParameters(updateStep.get());
+				return loss;
 			};
 
 			AtomicReference<Optional<Integer>> roundsLimit = new AtomicReference<>(Optional.empty());
@@ -429,7 +432,7 @@ public class NeuralNet {
 
 			Resolution contourResolution = new Resolution(100, 100);
 			BinaryOperator<Double> contourFunction = (x, y) -> {
-				return mlp.computeRaw(List.of(x, y)).get(0).data().get();
+				return mlp.computeRaw(List.of(x, y)).get(0);
 			};
 			ContourConf contourConf = new ContourConf("MLP", contourResolution, contourFunction);
 
@@ -440,7 +443,7 @@ public class NeuralNet {
 
 			FrameConf frameConf = new FrameConf(runConf, chartConf);
 
-			createFrame(frameConf, dataset, mlpRound);
+			createFrame(frameConf, dataset, mlp, mlpRound);
 		} else {
 			List<Double> xs = range(-5, 5, 0.25).toList();
 			Function<Double, Double> f = Math::tanh;
@@ -451,130 +454,56 @@ public class NeuralNet {
 		}
 	}
 
-	private static void createFrame(FrameConf frameConf, Map<List<Double>, Double> dataset, Runnable mlpRound) {
+	private static void createFrame(FrameConf frameConf, Map<List<Double>, Double> dataset, MLP mlp,
+			Supplier<Value> mlpRound) {
 		ChartPanel chartPanel = createChartPanel(frameConf.chartConf(), dataset);
 
-		JTextField roundsLimitField = new JTextField(frameConf.runConf().roundsLimit().get().map(Object::toString).orElse(""));
-		{
-			Color defaultBackground2 = roundsLimitField.getBackground();
-			registerTextUpdater(roundsLimitField, () -> {
-				roundsLimitField.setBackground(defaultBackground2);
-				String text2 = roundsLimitField.getText();
-				if (text2.isEmpty()) {
-					frameConf.runConf().roundsLimit().set(Optional.empty());
-				} else {
-					int value = Integer.parseInt(text2);
-					if (value <= 0) {
-						// Set text field background color to red to indicate error
-						roundsLimitField.setBackground(Color.RED);
-					} else {
-						frameConf.runConf().roundsLimit().set(Optional.of(value));
-					}
-				}
-			});
-		}
+		JLabel label = new JLabel();
+		JScrollPane pane = new JScrollPane(label);
+		JPanel graphPanel = new JPanel();
+		graphPanel.add(pane);
+		Consumer<Value> lossConsumer = loss -> {
+			if (false) {
+				String fileName = "graph";
+				Path dotPath = createTempPath(fileName, "dot");
+				createDot(loss, dotPath);
 
-		JTextField batchSizeField = new JTextField("" + frameConf.runConf().batchSize().get());
-		{
-			Color defaultBackground = batchSizeField.getBackground();
-			registerTextUpdater(batchSizeField, () -> {
-				batchSizeField.setBackground(defaultBackground);
-				String text = batchSizeField.getText();
-				if (text.isEmpty()) {
-					// Set text field background color to red to indicate error
-					batchSizeField.setBackground(Color.RED);
-				} else {
-					int value2 = Integer.parseInt(text);
-					if (value2 <= 0) {
-						// Set text field background color to red to indicate error
-						batchSizeField.setBackground(Color.RED);
-					} else {
-						frameConf.runConf().batchSize().set(value2);
-					}
-				}
-			});
-		}
+				Path svgPath = createTempPath(fileName, "svg");
+				dotToFile(dotPath, svgPath, "svg");
+				System.out.println("Graph: " + svgPath);
 
-		JTextField updateStepField = new JTextField("" + frameConf.runConf().updateStep().get());
-		{
-			Color defaultBackground1 = updateStepField.getBackground();
-			registerTextUpdater(updateStepField, () -> {
-				updateStepField.setBackground(defaultBackground1);
-				String text1 = updateStepField.getText();
-				if (text1.isEmpty()) {
-					// Set text field background color to red to indicate error
-					updateStepField.setBackground(Color.RED);
-				} else {
-					double value3 = Double.parseDouble(text1);
-					if (value3 <= 0) {
-						// Set text field background color to red to indicate error
-						updateStepField.setBackground(Color.RED);
-					} else {
-						frameConf.runConf().updateStep().set(value3);
-					}
-				}
-			});
-		}
+				Path pngPath = createTempPath(fileName, "png");
+				BufferedImage image = dotToImage(dotPath, pngPath);
 
-		JToggleButton runButton = new JToggleButton();
-
-		AbstractAction runAction = new AbstractAction("Run") {
-
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				if (!runButton.isSelected()) {
-					// Wait for the stuff to stop
-				} else {
-					Optional<Integer> roundsLimit = frameConf.runConf().roundsLimit().get();
-					if (roundsLimit.isEmpty()) {
-						SwingUtilities.invokeLater(new Runnable() {
-							@Override
-							public void run() {
-								if (!runButton.isSelected()) {
-									// Don't request any more run
-								} else {
-									int batchSize = frameConf.runConf().batchSize().get();
-									for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
-										mlpRound.run();
-									}
-									chartPanel.getChart().fireChartChanged();
-									chartPanel.repaint();
-									SwingUtilities.invokeLater(this);
-								}
-							}
-						});
-					} else {
-						// Snapshot the current number of rounds to not let it evolve during the run
-						// We have the toggle to stop the run explicitly
-						var ctx = new Object() {
-							// TODO Support empty case
-							int rounds = roundsLimit.get();
-						};
-						SwingUtilities.invokeLater(new Runnable() {
-							@Override
-							public void run() {
-								if (!runButton.isSelected()) {
-									// Don't request any more run
-								} else if (ctx.rounds == 0) {
-									// Untoggle automatically
-									runButton.setSelected(false);
-								} else {
-									int batchSize = Math.min(ctx.rounds, frameConf.runConf().batchSize().get());
-									for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
-										mlpRound.run();
-										ctx.rounds--;
-									}
-									chartPanel.getChart().fireChartChanged();
-									chartPanel.repaint();
-									SwingUtilities.invokeLater(this);
-								}
-							}
-						});
-					}
-				}
+				ImageIcon icon = new ImageIcon(image);
+				label.setIcon(icon);
 			}
 		};
-		runButton.setAction(runAction);
+
+		JTextField roundsLimitField = FieldBuilder.buildFieldFor(frameConf.runConf().roundsLimit())//
+				.toText(src -> src.get().map(Object::toString).orElse(""))//
+				.whenUpdate(Integer::parseInt).andHas(value -> value > 0)
+				.thenSet((src, value) -> src.set(Optional.of(value)))//
+				.whenEmptySet(src -> src.set(Optional.empty()))//
+				.otherwiseShow(FieldBuilder::error)//
+				.build();
+
+		JTextField batchSizeField = FieldBuilder.buildFieldFor(frameConf.runConf().batchSize())//
+				.toText(src -> Integer.toString(src.get()))//
+				.whenUpdate(Integer::parseInt).andHas(value -> value > 0).thenSet(AtomicInteger::set)//
+				.whenEmptyShow(FieldBuilder::error)// TODO Remove redundancy
+				.otherwiseShow(FieldBuilder::error)//
+				.build();
+
+		JTextField updateStepField = FieldBuilder.buildFieldFor(frameConf.runConf().updateStep())//
+				.toText(src -> Double.toString(src.get()))//
+				.whenUpdate(Double::parseDouble).andHas(value -> value > 0).thenSet(AtomicReference::set)//
+				.whenEmptyShow(FieldBuilder::error)// TODO Remove redundancy
+				.otherwiseShow(FieldBuilder::error)//
+				.build();
+
+		JToggleButton runButton = new JToggleButton();
+		runButton.setAction(createRunAction(frameConf, mlpRound, chartPanel, lossConsumer, runButton));
 
 		JPanel runPanel = new JPanel();
 		runPanel.setLayout(new GridBagLayout());
@@ -619,6 +548,87 @@ public class NeuralNet {
 		frame.pack();
 		frame.setSize(800, 600);
 		frame.setVisible(true);
+	}
+
+	static <T> Runnable createTextUpdater(JTextField textField, Function<String, T> textToValue,
+			Predicate<T> valueChecker, Consumer<T> valueConsumer, Runnable noTextDefault,
+			Consumer<JTextField> noCheckConsumer) {
+		Color defaultBackground = textField.getBackground();
+		return () -> {
+			textField.setBackground(defaultBackground);
+			String text = textField.getText();
+			if (text.isEmpty()) {
+				noTextDefault.run();
+			} else {
+				T value = textToValue.apply(text);
+				if (valueChecker.test(value)) {
+					valueConsumer.accept(value);
+				} else {
+					noCheckConsumer.accept(textField);
+				}
+			}
+		};
+	}
+
+	private static AbstractAction createRunAction(FrameConf frameConf, Supplier<Value> mlpRound, ChartPanel chartPanel,
+			Consumer<Value> lossConsumer, JToggleButton runButton) {
+		return new AbstractAction("Run") {
+
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				if (!runButton.isSelected()) {
+					// Wait for the stuff to stop
+				} else {
+					Optional<Integer> roundsLimit = frameConf.runConf().roundsLimit().get();
+					if (roundsLimit.isEmpty()) {
+						SwingUtilities.invokeLater(new Runnable() {
+							@Override
+							public void run() {
+								if (!runButton.isSelected()) {
+									// Don't request any more run
+								} else {
+									int batchSize = frameConf.runConf().batchSize().get();
+									for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
+										Value loss = mlpRound.get();
+										lossConsumer.accept(loss);
+									}
+									chartPanel.getChart().fireChartChanged();
+									chartPanel.repaint();
+									SwingUtilities.invokeLater(this);
+								}
+							}
+						});
+					} else {
+						// Snapshot the current number of rounds to not let it evolve during the run
+						// We have the toggle to stop the run explicitly
+						var ctx = new Object() {
+							int rounds = roundsLimit.get();
+						};
+						SwingUtilities.invokeLater(new Runnable() {
+							@Override
+							public void run() {
+								if (!runButton.isSelected()) {
+									// Don't request any more run
+								} else if (ctx.rounds == 0) {
+									// Untoggle automatically
+									runButton.setSelected(false);
+								} else {
+									int batchSize = Math.min(ctx.rounds, frameConf.runConf().batchSize().get());
+									for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
+										Value loss = mlpRound.get();
+										lossConsumer.accept(loss);
+										ctx.rounds--;
+									}
+									chartPanel.getChart().fireChartChanged();
+									chartPanel.repaint();
+									SwingUtilities.invokeLater(this);
+								}
+							}
+						});
+					}
+				}
+			}
+		};
 	}
 
 	private static ChartPanel createChartPanel(ChartConf chartConf, Map<List<Double>, Double> dataset) {
@@ -734,7 +744,7 @@ public class NeuralNet {
 	) {
 	}
 
-	private static void registerTextUpdater(JTextField textField, Runnable updater) {
+	static void registerTextUpdater(JTextField textField, Runnable updater) {
 		textField.getDocument().addDocumentListener(new DocumentListener() {
 
 			@Override
@@ -868,27 +878,6 @@ public class NeuralNet {
 		double minX = domainAxis.getLowerBound();
 		double maxX = domainAxis.getUpperBound();
 		return new ContourDimension(minX, maxX, resolutionX);
-	}
-
-	private static void graph(Value L) {
-		String fileName = "graph";
-		Path dotPath = createTempPath(fileName, "dot");
-		createDot(L, dotPath);
-
-		Path svgPath = createTempPath(fileName, "svg");
-		dotToFile(dotPath, svgPath, "svg");
-		System.out.println("Graph: " + svgPath);
-
-		Path pngPath = createTempPath(fileName, "png");
-		BufferedImage image = dotToImage(dotPath, pngPath);
-
-		JFrame frame = new JFrame("Graph");
-		frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-		frame.setLayout(new GridLayout(1, 1));
-		frame.add(new JScrollPane(new JLabel(new ImageIcon(image))));
-		frame.pack();
-		frame.setSize(800, 600);
-		frame.setVisible(true);
 	}
 
 	private static Path createTempPath(String fileName, String ext) {

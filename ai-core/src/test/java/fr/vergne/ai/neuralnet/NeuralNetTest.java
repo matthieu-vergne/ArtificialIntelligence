@@ -93,7 +93,6 @@ class NeuralNetTest {
 		MLP mlp = new MLP(ParameterNamer.create(), 3, List.of(4, 4, 1), (label) -> random.nextDouble(-1.0, 1.0));
 		List<Value> x = Stream.of(2.0, 3.0, -1.0).map(Value::of).toList();
 		Value result = mlp.compute(x).get(0);
-		System.out.println(result.data().get());
 
 		assertThat(result.data().get(), is(-0.6836299751085826));
 	}

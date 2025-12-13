@@ -459,7 +459,7 @@ public class NeuralNet {
 			Supplier<Value> mlpRound) {
 		ChartPanel chartPanel = createChartPanel(frameConf.chartConf(), dataset);
 
-		// TODO Plot loss over time
+		// TODO Plot loss over rounds
 
 		JLabel label = new JLabel();
 		JScrollPane pane = new JScrollPane(label);

@@ -479,24 +479,21 @@ public class NeuralNet {
 		};
 
 		JTextField roundsLimitField = FieldBuilder.buildFieldFor(frameConf.runConf().roundsLimit())//
-				.toText(src -> src.get().map(Object::toString).orElse(""))//
-				.whenUpdate(Integer::parseInt).andHas(value -> value > 0)
-				.thenSet((src, value) -> src.set(Optional.of(value)))//
-				.whenEmptySet(src -> src.set(Optional.empty()))//
+				.intoText(src -> src.get().map(Object::toString).orElse(""))//
+				.as(Integer::parseInt).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
+				.whenEmptyApply(src -> src.set(Optional.empty()))//
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
 		JTextField batchSizeField = FieldBuilder.buildFieldFor(frameConf.runConf().batchSize())//
-				.toText(src -> Integer.toString(src.get()))//
-				.whenUpdate(Integer::parseInt).andHas(value -> value > 0).thenSet(AtomicInteger::set)//
-				.whenEmptyShow(FieldBuilder::error)// TODO Remove redundancy
+				.intoText(src -> Integer.toString(src.get()))//
+				.as(Integer::parseInt).ifIs(value -> value > 0).thenApply(AtomicInteger::set)//
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
 		JTextField updateStepField = FieldBuilder.buildFieldFor(frameConf.runConf().updateStep())//
-				.toText(src -> Double.toString(src.get()))//
-				.whenUpdate(Double::parseDouble).andHas(value -> value > 0).thenSet(AtomicReference::set)//
-				.whenEmptyShow(FieldBuilder::error)// TODO Remove redundancy
+				.intoText(src -> Double.toString(src.get()))//
+				.as(Double::parseDouble).ifIs(value -> value > 0).thenApply(AtomicReference::set)//
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 

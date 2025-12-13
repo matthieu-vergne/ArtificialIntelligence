@@ -76,10 +76,14 @@ interface FieldBuilder<T> {
 						Runnable textUpdater = () -> {
 							textField.setBackground(defaultBackground);
 							String text = textField.getText();
-							if (text.isEmpty()) {
-								noTextDefault.accept(textField, source);
-							} else {
-								textConsumer.accept(textField, text);
+							try {
+								if (text.isEmpty()) {
+									noTextDefault.accept(textField, source);
+								} else {
+									textConsumer.accept(textField, text);
+								}
+							} catch (Exception cause) {
+								error(textField);
 							}
 						};
 

@@ -48,6 +48,7 @@ import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
 import javax.swing.SwingUtilities;
@@ -397,22 +398,25 @@ public class NeuralNet {
 	public static void main(String[] args) {
 		if (true) {
 			Random random = new Random(0);
+			// TODO Provide separate outputs (like inputs)
+			// TODO Parallelize computation
 			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(4, 1), (label) -> random.nextDouble(-1.0, 1.0));
+//			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(20, 1), (label) -> random.nextDouble(-1.0, 1.0));
+//			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1), (label) -> random.nextDouble(-1.0, 1.0));
 			Map<List<Double>, Double> dataset = new LinkedHashMap<>();
 			for (int i = 0; i < 100; i++) {
 				double x = random.nextDouble(-5, 5);
 				double y = random.nextDouble(-5, 5);
-//				double value = Math.signum(y - polynom(x, List.of(-2.0, 5.0, 4.0, -3.0)));
 				double value = Math.signum(Math.sqrt(x * x + y * y) - 3);
+//				double value = Math.signum(y - polynom(x, List.of(-2.0, 5.0, 4.0, -3.0)));
+//				double value = Math.signum(y - Math.sin(x) * 5);
+//				double value = Math.signum(y - Math.sin(10 * x) * 5);
 				dataset.put(List.of(x, y), value);
 			}
 
-			AtomicInteger roundCounter = new AtomicInteger();
 			AtomicReference<Double> updateStep = new AtomicReference<Double>(0.01);
 			Supplier<Value> mlpRound = () -> {
-				int round = roundCounter.incrementAndGet();
 				Value loss = mlp.computeLoss(dataset);
-				System.out.println("Loss " + round + " = " + loss.data().get());
 				loss.backward();
 				mlp.updateParameters(updateStep.get());
 				return loss;
@@ -422,10 +426,9 @@ public class NeuralNet {
 			AtomicInteger batchSize = new AtomicInteger(1);
 			RunConf runConf = new RunConf(roundsLimit, batchSize, updateStep);
 
-			double boundaryRange = 0.1;
 			Collection<ChartDatasetConf> datasetConfs = List.of(//
-					new ChartDatasetConf("1.0", value -> value > boundaryRange / 2, Color.RED), //
-					new ChartDatasetConf("-1.0", value -> value < -boundaryRange / 2, Color.BLUE)//
+					new ChartDatasetConf("1.0", value -> value > 0, Color.RED), //
+					new ChartDatasetConf("-1.0", value -> value < 0, Color.BLUE)//
 			);
 
 			Resolution contourResolution = new Resolution(100, 100);
@@ -461,6 +464,10 @@ public class NeuralNet {
 		JPanel graphPanel = new JPanel();
 		graphPanel.add(pane);
 		Consumer<Value> lossConsumer = loss -> {
+			// TODO Show MLP graphically
+			// TODO Produce Loss SVG on demand
+			// TODO Produce MLP SVG on demand
+			// TODO Paint MLP only if shown
 			if (false) {
 				String fileName = "graph";
 				Path dotPath = createTempPath(fileName, "dot");
@@ -497,8 +504,15 @@ public class NeuralNet {
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
+		JTextField roundField = new JTextField();
+		JTextField lossField = new JTextField();
+		BiConsumer<Long, Value> lossFieldUpdater = (round, loss) -> {
+			roundField.setText(round.toString());
+			lossField.setText(loss.data().get().toString());
+		};
+
 		JToggleButton runButton = new JToggleButton();
-		runButton.setAction(createRunAction(frameConf, mlpRound, chartPanel, lossConsumer, runButton));
+		runButton.setAction(createTrainAction(frameConf, mlpRound, chartPanel, lossFieldUpdater, runButton));
 
 		JPanel runPanel = new JPanel();
 		runPanel.setLayout(new GridBagLayout());
@@ -521,22 +535,38 @@ public class NeuralNet {
 			runPanel.add(new JLabel("and step of"), constraints);
 			constraints.weightx = 1.0;
 			runPanel.add(updateStepField, constraints);
+			constraints.weightx = 0.0;
+			runPanel.add(new JLabel("|"), constraints);
+			constraints.weightx = 0.0;
+			runPanel.add(new JLabel("Round:"), constraints);
+			constraints.weightx = 1.0;
+			runPanel.add(roundField, constraints);
+			constraints.weightx = 0.0;
+			runPanel.add(new JLabel("Loss:"), constraints);
+			constraints.weightx = 1.0;
+			runPanel.add(lossField, constraints);
 		}
+
+		JTabbedPane screenPane = new JTabbedPane();
+		screenPane.add(chartPanel, "chart");
+		screenPane.add(graphPanel, "graph");
+		screenPane.add(new JPanel(), "empty");
+		// To show the headers with each card title
 
 		JFrame frame = new JFrame("MLP");
 		frame.setLayout(new GridBagLayout());
 		{
-			GridBagConstraints constraints1 = new GridBagConstraints();
-			constraints1.gridx = 0;
-			constraints1.gridy = GridBagConstraints.RELATIVE;
-			constraints1.weightx = 1.0;
-			constraints1.weighty = 1.0;
-			constraints1.fill = GridBagConstraints.BOTH;
-			frame.add(chartPanel, constraints1);
-			constraints1.weightx = 1.0;
-			constraints1.weighty = 0.0;
-			constraints1.fill = GridBagConstraints.HORIZONTAL;
-			frame.add(runPanel, constraints1);
+			GridBagConstraints constraints = new GridBagConstraints();
+			constraints.gridx = 0;
+			constraints.gridy = GridBagConstraints.RELATIVE;
+			constraints.weightx = 1.0;
+			constraints.weighty = 1.0;
+			constraints.fill = GridBagConstraints.BOTH;
+			frame.add(screenPane, constraints);
+			constraints.weightx = 1.0;
+			constraints.weighty = 0.0;
+			constraints.fill = GridBagConstraints.HORIZONTAL;
+			frame.add(runPanel, constraints);
 		}
 
 		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -545,9 +575,10 @@ public class NeuralNet {
 		frame.setVisible(true);
 	}
 
-	private static AbstractAction createRunAction(FrameConf frameConf, Supplier<Value> mlpRound, ChartPanel chartPanel,
-			Consumer<Value> lossConsumer, JToggleButton runButton) {
-		return new AbstractAction("Run") {
+	private static AbstractAction createTrainAction(FrameConf frameConf, Supplier<Value> mlpRound,
+			ChartPanel chartPanel, BiConsumer<Long, Value> roundConsumer, JToggleButton runButton) {
+		return new AbstractAction("Train") {
+			long round = 0;
 
 			@Override
 			public void actionPerformed(ActionEvent e) {
@@ -564,8 +595,9 @@ public class NeuralNet {
 								} else {
 									int batchSize = frameConf.runConf().batchSize().get();
 									for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
+										round++;
 										Value loss = mlpRound.get();
-										lossConsumer.accept(loss);
+										roundConsumer.accept(round, loss);
 									}
 									chartPanel.getChart().fireChartChanged();
 									chartPanel.repaint();
@@ -590,8 +622,9 @@ public class NeuralNet {
 								} else {
 									int batchSize = Math.min(ctx.rounds, frameConf.runConf().batchSize().get());
 									for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
+										round++;
 										Value loss = mlpRound.get();
-										lossConsumer.accept(loss);
+										roundConsumer.accept(round, loss);
 										ctx.rounds--;
 									}
 									chartPanel.getChart().fireChartChanged();

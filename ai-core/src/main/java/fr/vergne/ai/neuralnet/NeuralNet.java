@@ -400,17 +400,23 @@ public class NeuralNet {
 			Random random = new Random(0);
 			// TODO Provide separate outputs (like inputs)
 			// TODO Parallelize computation
-			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(4, 1), (_) -> random.nextDouble(-1.0, 1.0));
-//			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(20, 1), (_) -> random.nextDouble(-1.0, 1.0));
-//			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1), (_) -> random.nextDouble(-1.0, 1.0));
+			MLP mlp = switch (1) {
+			case 1 -> new MLP(ParameterNamer.create(), 2, List.of(4, 1), (_) -> random.nextDouble(-1.0, 1.0));
+			case 2 -> new MLP(ParameterNamer.create(), 2, List.of(20, 1), (_) -> random.nextDouble(-1.0, 1.0));
+			case 3 -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1), (_) -> random.nextDouble(-1.0, 1.0));
+			default -> throw new IllegalArgumentException("Unexpected MLP");
+			};
 			Map<List<Double>, Double> dataset = new LinkedHashMap<>();
 			for (int i = 0; i < 100; i++) {
 				double x = random.nextDouble(-5, 5);
 				double y = random.nextDouble(-5, 5);
-				double value = Math.signum(Math.sqrt(x * x + y * y) - 3);
-//				double value = Math.signum(y - polynom(x, List.of(-2.0, 5.0, 4.0, -3.0)));
-//				double value = Math.signum(y - Math.sin(x) * 5);
-//				double value = Math.signum(y - Math.sin(10 * x) * 5);
+				double value = switch (1) {
+				case 1 -> Math.signum(Math.sqrt(x * x + y * y) - 3);
+				case 2 -> Math.signum(y - polynom(x, List.of(-2.0, 5.0, 4.0, -3.0)));
+				case 3 -> Math.signum(y - Math.sin(x) * 5);
+				case 4 -> Math.signum(y - Math.sin(10 * x) * 5);
+				default -> throw new IllegalArgumentException("Unexpected dataset outputs");
+				};
 				dataset.put(List.of(x, y), value);
 			}
 

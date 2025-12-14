@@ -4,8 +4,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.logging.LogManager;
 
-import fr.vergne.ai.ttt.TicTacToeBoard.Player;
-
 /**
  * The {@link TicTacToeEnvironment} aims at providing an environment in which
  * Tic-Tac-Toe artefacts can evolve. In particular, players can use freely a

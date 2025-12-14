@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -30,6 +31,7 @@ import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -428,13 +430,13 @@ public class NeuralNet {
 				return loss;
 			};
 
-			AtomicReference<Optional<Integer>> roundsLimit = new AtomicReference<>(Optional.empty());
-			AtomicInteger batchSize = new AtomicInteger(1);
+			AtomicReference<Optional<Long>> roundsLimit = new AtomicReference<>(Optional.empty());
+			AtomicLong batchSize = new AtomicLong(1);
 			RunConf runConf = new RunConf(roundsLimit, batchSize, updateStep);
 
-			Collection<ChartDatasetConf> datasetConfs = List.of(//
-					new ChartDatasetConf("1.0", value -> value > 0, Color.RED), //
-					new ChartDatasetConf("-1.0", value -> value < 0, Color.BLUE)//
+			Collection<VisualDatasetConf> datasetConfs = List.of(//
+					new VisualDatasetConf("1.0", value -> value > 0, Color.RED), //
+					new VisualDatasetConf("-1.0", value -> value < 0, Color.BLUE)//
 			);
 
 			Resolution contourResolution = new Resolution(100, 100);
@@ -446,7 +448,7 @@ public class NeuralNet {
 			int xIndex = 0;
 			int yIndex = 1;
 			Color defaultColor = Color.WHITE;
-			ChartConf chartConf = new ChartConf(xIndex, yIndex, defaultColor, datasetConfs, contourConf);
+			VisualConf chartConf = new VisualConf(xIndex, yIndex, defaultColor, datasetConfs, contourConf);
 
 			FrameConf frameConf = new FrameConf(runConf, chartConf);
 
@@ -463,46 +465,77 @@ public class NeuralNet {
 
 	private static void createFrame(FrameConf frameConf, Map<List<Double>, Double> dataset, MLP mlp,
 			Supplier<Value> mlpRound) {
-		ChartPanel chartPanel = createChartPanel(frameConf.chartConf(), dataset);
+		ChartPanel visualPanel = createVisualPanel(frameConf.visualConf(), dataset);
 
-		// TODO Plot loss over rounds
+		ChartPanel lossPlotPanel;
+		Consumer<List<RoundResult>> plotUpdater;
+		{
 
-		JLabel label = new JLabel();
-		JScrollPane pane = new JScrollPane(label);
-		JPanel graphPanel = new JPanel();
-		graphPanel.add(pane);
-		Consumer<Value> lossConsumer = loss -> {
-			// TODO Show MLP graphically
-			// TODO Produce Loss SVG on demand
-			// TODO Produce MLP SVG on demand
-			// TODO Paint MLP only if shown
-			if (false) {
-				String fileName = "graph";
-				Path dotPath = createTempPath(fileName, "dot");
-				createDot(loss, dotPath);
+			XYSeriesCollection plotDataset = new XYSeriesCollection();
+			XYSeries series = new XYSeries("Loss");
+			plotDataset.addSeries(series);
+			JFreeChart chart = ChartFactory.createXYLineChart(null, // Title
+					"Rounds", // X-axis
+					"Loss", // Y-axis
+					plotDataset, // Dataset
+					PlotOrientation.VERTICAL, // Orientation
+					false, // Include legend
+					true, // Tooltips
+					false // URLs
+			);
 
-				Path svgPath = createTempPath(fileName, "svg");
-				dotToFile(dotPath, svgPath, "svg");
-				System.out.println("Graph: " + svgPath);
+			lossPlotPanel = new ChartPanel(chart);
 
-				Path pngPath = createTempPath(fileName, "png");
-				BufferedImage image = dotToImage(dotPath, pngPath);
+			plotUpdater = roundResults -> {
+				roundResults.forEach(roundResult -> {
+					series.add(roundResult.round(), roundResult.loss().data().get());
+				});
+				chart.fireChartChanged();
+			};
+		}
 
-				ImageIcon icon = new ImageIcon(image);
-				label.setIcon(icon);
-			}
-		};
+		JPanel mlpPanel;
+		Consumer<List<RoundResult>> graphUpdater;
+		{
+			JLabel label = new JLabel();
+			JScrollPane pane = new JScrollPane(label);
+			mlpPanel = new JPanel();
+			mlpPanel.add(pane);
+			graphUpdater = roundResults -> {
+				roundResults.forEach(roundResult -> {
+					// TODO Show MLP graphically
+					// TODO Produce Loss SVG on demand
+					// TODO Produce MLP SVG on demand
+					// TODO Paint MLP only if shown
+					if (false) {
+						String fileName = "graph";
+						Path dotPath = createTempPath(fileName, "dot");
+						createDot(roundResult.loss(), dotPath);
+
+						Path svgPath = createTempPath(fileName, "svg");
+						dotToFile(dotPath, svgPath, "svg");
+						System.out.println("Graph: " + svgPath);
+
+						Path pngPath = createTempPath(fileName, "png");
+						BufferedImage image = dotToImage(dotPath, pngPath);
+
+						ImageIcon icon = new ImageIcon(image);
+						label.setIcon(icon);
+					}
+				});
+			};
+		}
 
 		JTextField roundsLimitField = FieldBuilder.buildFieldFor(frameConf.runConf().roundsLimit())//
 				.intoText(src -> src.get().map(Object::toString).orElse(""))//
-				.as(Integer::parseInt).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
+				.as(Long::parseLong).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
 				.whenEmptyApply(src -> src.set(Optional.empty()))//
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
 		JTextField batchSizeField = FieldBuilder.buildFieldFor(frameConf.runConf().batchSize())//
-				.intoText(src -> Integer.toString(src.get()))//
-				.as(Integer::parseInt).ifIs(value -> value > 0).thenApply(AtomicInteger::set)//
+				.intoText(src -> Long.toString(src.get()))//
+				.as(Long::parseLong).ifIs(value -> value > 0).thenApply(AtomicLong::set)//
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
@@ -514,13 +547,16 @@ public class NeuralNet {
 
 		JTextField roundField = new JTextField();
 		JTextField lossField = new JTextField();
-		BiConsumer<Long, Value> lossFieldUpdater = (round, loss) -> {
-			roundField.setText(round.toString());
-			lossField.setText(loss.data().get().toString());
+		Consumer<List<RoundResult>> lossFieldUpdater = roundResults -> {
+			roundResults.forEach(roundResult -> {
+				roundField.setText(Long.toString(roundResult.round()));
+				lossField.setText(roundResult.loss().data().get().toString());
+			});
 		};
 
 		JToggleButton runButton = new JToggleButton();
-		runButton.setAction(createTrainAction(frameConf, mlpRound, chartPanel, lossFieldUpdater, runButton));
+		Consumer<List<RoundResult>> roundConsumer = lossFieldUpdater.andThen(graphUpdater).andThen(plotUpdater);
+		runButton.setAction(createTrainAction(frameConf, mlpRound, visualPanel, roundConsumer, runButton));
 
 		JPanel runPanel = new JPanel();
 		runPanel.setLayout(new GridBagLayout());
@@ -556,8 +592,9 @@ public class NeuralNet {
 		}
 
 		JTabbedPane screenPane = new JTabbedPane();
-		screenPane.add(chartPanel, "chart");
-		screenPane.add(graphPanel, "graph");
+		screenPane.add(visualPanel, "Visual");
+		screenPane.add(lossPlotPanel, "Loss plot");
+		screenPane.add(mlpPanel, "MLP");
 		screenPane.add(new JPanel(), "empty");
 		// To show the headers with each card title
 
@@ -584,7 +621,7 @@ public class NeuralNet {
 	}
 
 	private static AbstractAction createTrainAction(FrameConf frameConf, Supplier<Value> mlpRound,
-			ChartPanel chartPanel, BiConsumer<Long, Value> roundConsumer, JToggleButton runButton) {
+			ChartPanel chartPanel, Consumer<List<RoundResult>> roundConsumer, JToggleButton runButton) {
 		return new AbstractAction("Train") {
 			long round = 0;
 
@@ -593,69 +630,57 @@ public class NeuralNet {
 				if (!runButton.isSelected()) {
 					// Wait for the stuff to stop
 				} else {
-					Optional<Integer> roundsLimit = frameConf.runConf().roundsLimit().get();
-					if (roundsLimit.isEmpty()) {
-						SwingUtilities.invokeLater(new Runnable() {
-							@Override
-							public void run() {
-								if (!runButton.isSelected()) {
-									// Don't request any more run
-								} else {
-									int batchSize = frameConf.runConf().batchSize().get();
-									for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
-										round++;
-										Value loss = mlpRound.get();
-										roundConsumer.accept(round, loss);
-									}
-									chartPanel.getChart().fireChartChanged();
-									chartPanel.repaint();
-									SwingUtilities.invokeLater(this);
-								}
-							}
-						});
-					} else {
-						// Snapshot the current number of rounds to not let it evolve during the run
-						// We have the toggle to stop the run explicitly
-						var ctx = new Object() {
-							int rounds = roundsLimit.get();
-						};
-						SwingUtilities.invokeLater(new Runnable() {
-							@Override
-							public void run() {
-								if (!runButton.isSelected()) {
-									// Don't request any more run
-								} else if (ctx.rounds == 0) {
+					AtomicReference<Optional<Long>> roundsLimit = frameConf.runConf().roundsLimit();
+					AtomicLong batchSize = frameConf.runConf().batchSize();
+					SwingUtilities.invokeLater(new Runnable() {
+						@Override
+						public void run() {
+							if (!runButton.isSelected()) {
+								// Don't request any more run
+							} else {
+								if (roundsLimit.get().isPresent() && roundsLimit.get().get() <= round) {
 									// Untoggle automatically
 									runButton.setSelected(false);
 								} else {
-									int batchSize = Math.min(ctx.rounds, frameConf.runConf().batchSize().get());
-									for (int i = 0; i < batchSize && runButton.isSelected(); i++) {
+									List<RoundResult> results = new LinkedList<>();
+									for (int batchedRound = 0; runButton.isSelected()
+											&& batchedRound < batchLimit(batchedRound, batchSize, round,
+													roundsLimit); batchedRound++) {
 										round++;
 										Value loss = mlpRound.get();
-										roundConsumer.accept(round, loss);
-										ctx.rounds--;
+										RoundResult result = new RoundResult(round, loss);
+										results.add(result);
 									}
+									roundConsumer.accept(results);
 									chartPanel.getChart().fireChartChanged();
 									chartPanel.repaint();
 									SwingUtilities.invokeLater(this);
 								}
 							}
-						});
-					}
+						}
+
+						private long batchLimit(int batchedRound, AtomicLong batchSize, long round,
+								AtomicReference<Optional<Long>> roundsLimit) {
+							long roundAtStartOfBatch = round - batchedRound;
+							long totalLimit = roundsLimit.get().orElse(Long.MAX_VALUE);
+							long batchLimit = batchSize.get();
+							return Math.min(totalLimit - roundAtStartOfBatch, batchLimit);
+						}
+					});
 				}
 			}
 		};
 	}
 
-	private static ChartPanel createChartPanel(ChartConf chartConf, Map<List<Double>, Double> dataset) {
-		BiFunction<ChartDatasetConf, Integer, List<Double>> valuesExtractor = (datasetConf, index) -> {
+	private static ChartPanel createVisualPanel(VisualConf chartConf, Map<List<Double>, Double> dataset) {
+		BiFunction<VisualDatasetConf, Integer, List<Double>> valuesExtractor = (datasetConf, index) -> {
 			return dataset.entrySet().stream()//
 					.filter(entry -> datasetConf.predicate().test(entry.getValue()))//
 					.map(Entry::getKey)//
 					.map(list -> list.get(index))//
 					.toList();
 		};
-		Function<ChartDatasetConf, SeriesDefinition> seriesFactory = datasetConf -> {
+		Function<VisualDatasetConf, SeriesDefinition> seriesFactory = datasetConf -> {
 			return new SeriesDefinition(//
 					valuesExtractor.apply(datasetConf, chartConf.xIndex()), //
 					valuesExtractor.apply(datasetConf, chartConf.yIndex()), //
@@ -702,12 +727,12 @@ public class NeuralNet {
 		plot.setRenderer(newIndex, contourRenderer);
 	}
 
-	private static Function<Double, Paint> createContourPainter(ChartConf chartConf) {
+	private static Function<Double, Paint> createContourPainter(VisualConf chartConf) {
 		Function<Double, Paint> contourPainter = value -> {
 			Color datasetColor = chartConf.datasetConfs().stream()//
 					.filter(datasetConf -> datasetConf.predicate().test(value))//
 					.findAny()//
-					.map(ChartDatasetConf::color).orElse(chartConf.defaultColor());
+					.map(VisualDatasetConf::color).orElse(chartConf.defaultColor());
 			return transparent(datasetColor);
 		};
 		return contourPainter;
@@ -725,24 +750,24 @@ public class NeuralNet {
 	}
 
 	record RunConf(//
-			AtomicReference<Optional<Integer>> roundsLimit, //
-			AtomicInteger batchSize, //
+			AtomicReference<Optional<Long>> roundsLimit, //
+			AtomicLong batchSize, //
 			AtomicReference<Double> updateStep//
 	) {
 	}
 
-	record ChartDatasetConf(//
+	record VisualDatasetConf(//
 			String label, //
 			Predicate<Double> predicate, //
 			Color color//
 	) {
 	}
 
-	record ChartConf(//
+	record VisualConf(//
 			int xIndex, //
 			int yIndex, //
 			Color defaultColor, //
-			Collection<ChartDatasetConf> datasetConfs, //
+			Collection<VisualDatasetConf> datasetConfs, //
 			ContourConf contourConf//
 	) {
 	}
@@ -756,7 +781,7 @@ public class NeuralNet {
 
 	record FrameConf(//
 			RunConf runConf, //
-			ChartConf chartConf //
+			VisualConf visualConf //
 	) {
 	}
 
@@ -1096,5 +1121,8 @@ public class NeuralNet {
 	}
 
 	record ContourDimension(double min, double max, int resolution) {
+	}
+
+	record RoundResult(long round, Value loss) {
 	}
 }

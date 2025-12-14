@@ -5,7 +5,6 @@ import static java.util.stream.Collectors.toMap;
 import java.awt.Color;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
-import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Paint;
 import java.awt.event.ActionEvent;
@@ -58,7 +57,6 @@ import javax.swing.JToggleButton;
 import javax.swing.SwingUtilities;
 
 import org.jfree.chart.ChartFactory;
-import org.jfree.chart.ChartFrame;
 import org.jfree.chart.ChartPanel;
 import org.jfree.chart.JFreeChart;
 import org.jfree.chart.axis.LogarithmicAxis;
@@ -402,89 +400,80 @@ public class NeuralNet {
 	}
 
 	public static void main(String[] args) {
-		if (true) {
-			Random random = new Random(0);
-			// TODO Provide separate outputs (like inputs)
-			// TODO Parallelize computation
-			MLP mlp = switch (1) {
-			case 1 -> new MLP(ParameterNamer.create(), 2, List.of(4, 1), (_) -> random.nextDouble(-1.0, 1.0));
-			case 2 -> new MLP(ParameterNamer.create(), 2, List.of(20, 1), (_) -> random.nextDouble(-1.0, 1.0));
-			case 3 -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1), (_) -> random.nextDouble(-1.0, 1.0));
-			default -> throw new IllegalArgumentException("Unexpected MLP");
+		Random random = new Random(0);
+		// TODO Provide separate outputs (like inputs)
+		// TODO Parallelize computation
+		MLP mlp = switch (1) {
+		case 1 -> new MLP(ParameterNamer.create(), 2, List.of(4, 1), (_) -> random.nextDouble(-1.0, 1.0));
+		case 2 -> new MLP(ParameterNamer.create(), 2, List.of(20, 1), (_) -> random.nextDouble(-1.0, 1.0));
+		case 3 -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1), (_) -> random.nextDouble(-1.0, 1.0));
+		default -> throw new IllegalArgumentException("Unexpected MLP");
+		};
+		Map<List<Double>, Double> dataset = new LinkedHashMap<>();
+		for (int i = 0; i < 100; i++) {
+			double x = random.nextDouble(-5, 5);
+			double y = random.nextDouble(-5, 5);
+			double value = switch (1) {
+			case 1 -> Math.signum(Math.sqrt(x * x + y * y) - 3);
+			case 2 -> Math.signum(y - polynom(x, List.of(-2.0, 5.0, 4.0, -3.0)));
+			case 3 -> Math.signum(y - Math.sin(x) * 5);
+			case 4 -> Math.signum(y - Math.sin(10 * x) * 5);
+			default -> throw new IllegalArgumentException("Unexpected dataset outputs");
 			};
-			Map<List<Double>, Double> dataset = new LinkedHashMap<>();
-			for (int i = 0; i < 100; i++) {
-				double x = random.nextDouble(-5, 5);
-				double y = random.nextDouble(-5, 5);
-				double value = switch (1) {
-				case 1 -> Math.signum(Math.sqrt(x * x + y * y) - 3);
-				case 2 -> Math.signum(y - polynom(x, List.of(-2.0, 5.0, 4.0, -3.0)));
-				case 3 -> Math.signum(y - Math.sin(x) * 5);
-				case 4 -> Math.signum(y - Math.sin(10 * x) * 5);
-				default -> throw new IllegalArgumentException("Unexpected dataset outputs");
-				};
-				dataset.put(List.of(x, y), value);
-			}
-
-			AtomicReference<Double> updateStep = new AtomicReference<Double>(0.001);
-			Supplier<RoundData> mlpRound = () -> {
-				Instant start = Instant.now();
-				Value loss = mlp.computeLoss(dataset);
-				Instant computeTime = Instant.now();
-				loss.backward();
-				Instant backwardTime = Instant.now();
-				mlp.updateParameters(updateStep.get());
-				Instant updateTime = Instant.now();
-				return new RoundData(//
-						loss, //
-						Duration.between(start, computeTime), //
-						Duration.between(computeTime, backwardTime), //
-						Duration.between(backwardTime, updateTime)//
-				);
-			};
-
-			AtomicReference<Optional<Long>> roundsLimit = new AtomicReference<>(Optional.empty());
-			AtomicLong batchSize = new AtomicLong(1);
-			TrainConf trainConf = new TrainConf(roundsLimit, batchSize, updateStep);
-
-			Collection<VisualDatasetConf> datasetConfs = List.of(//
-					new VisualDatasetConf("1.0", value -> value > 0, Color.RED), //
-					new VisualDatasetConf("-1.0", value -> value < 0, Color.BLUE)//
-			);
-
-			Resolution contourResolution = new Resolution(100, 100);
-			BinaryOperator<Double> contourFunction = (x, y) -> {
-				return mlp.computeRaw(List.of(x, y)).get(0);
-			};
-			ContourConf contourConf = new ContourConf("MLP", contourResolution, contourFunction);
-
-			int xIndex = 0;
-			int yIndex = 1;
-			Color defaultColor = Color.WHITE;
-			VisualConf chartConf = new VisualConf(xIndex, yIndex, defaultColor, datasetConfs, contourConf);
-
-			PlotUtils.WindowFactory windowFactory = switch (2) {
-			case 1 -> PlotUtils.createNoWindowFactory();
-			case 2 -> PlotUtils.createFixedWindowFactory(100);
-			case 3 -> PlotUtils.createSlidingWindowFactory(10);
-			default -> throw new IllegalArgumentException("Unexpected window factory");
-			};
-			RectangleEdge legendPosition = RectangleEdge.TOP;
-			TimePlotConf timePlotConf = new TimePlotConf(windowFactory, legendPosition);
-
-			LossPlotConf lossPlotConf = new LossPlotConf(windowFactory);
-
-			FrameConf frameConf = new FrameConf(trainConf, chartConf, lossPlotConf, timePlotConf);
-
-			createFrame(frameConf, dataset, mlp, mlpRound);
-		} else {
-			List<Double> xs = range(-5, 5, 0.25).toList();
-			Function<Double, Double> f = Math::tanh;
-			Function<Double, Double> g = derivativeOf(f);
-			SeriesDefinition sf = new SeriesDefinition(xs, xs.stream().map(f).toList(), "tanh");
-			SeriesDefinition sg = new SeriesDefinition(xs, xs.stream().map(g).toList(), "tanh'");
-			plot(List.of(sf, sg), "x", "y", "tanh", "tanh", X.INTEGRATED);
+			dataset.put(List.of(x, y), value);
 		}
+
+		AtomicReference<Double> updateStep = new AtomicReference<Double>(0.001);
+		Supplier<RoundData> mlpRound = () -> {
+			Instant start = Instant.now();
+			Value loss = mlp.computeLoss(dataset);
+			Instant computeTime = Instant.now();
+			loss.backward();
+			Instant backwardTime = Instant.now();
+			mlp.updateParameters(updateStep.get());
+			Instant updateTime = Instant.now();
+			return new RoundData(//
+					loss, //
+					Duration.between(start, computeTime), //
+					Duration.between(computeTime, backwardTime), //
+					Duration.between(backwardTime, updateTime)//
+			);
+		};
+
+		AtomicReference<Optional<Long>> roundsLimit = new AtomicReference<>(Optional.empty());
+		AtomicLong batchSize = new AtomicLong(1);
+		TrainConf trainConf = new TrainConf(roundsLimit, batchSize, updateStep);
+
+		Collection<VisualDatasetConf> datasetConfs = List.of(//
+				new VisualDatasetConf("1.0", value -> value > 0, Color.RED), //
+				new VisualDatasetConf("-1.0", value -> value < 0, Color.BLUE)//
+		);
+
+		Resolution contourResolution = new Resolution(100, 100);
+		BinaryOperator<Double> contourFunction = (x, y) -> {
+			return mlp.computeRaw(List.of(x, y)).get(0);
+		};
+		ContourConf contourConf = new ContourConf("MLP", contourResolution, contourFunction);
+
+		int xIndex = 0;
+		int yIndex = 1;
+		Color defaultColor = Color.WHITE;
+		VisualConf chartConf = new VisualConf(xIndex, yIndex, defaultColor, datasetConfs, contourConf);
+
+		PlotUtils.WindowFactory windowFactory = switch (2) {
+		case 1 -> PlotUtils.createNoWindowFactory();
+		case 2 -> PlotUtils.createFixedWindowFactory(100);
+		case 3 -> PlotUtils.createSlidingWindowFactory(10);
+		default -> throw new IllegalArgumentException("Unexpected window factory");
+		};
+		RectangleEdge legendPosition = RectangleEdge.TOP;
+		TimePlotConf timePlotConf = new TimePlotConf(windowFactory, legendPosition);
+
+		LossPlotConf lossPlotConf = new LossPlotConf(windowFactory);
+
+		FrameConf frameConf = new FrameConf(trainConf, chartConf, lossPlotConf, timePlotConf);
+
+		createFrame(frameConf, dataset, mlp, mlpRound);
 	}
 
 	record Parts(JPanel panel, Consumer<List<RoundResult>> panelUpdater) {
@@ -1021,12 +1010,12 @@ public class NeuralNet {
 			}
 
 			@Override
-			public Comparable getSeriesKey(int series) {
+			public Comparable<?> getSeriesKey(int series) {
 				return contourConf.name();
 			}
 
 			@Override
-			public int indexOf(Comparable seriesKey) {
+			public int indexOf(@SuppressWarnings("rawtypes") Comparable seriesKey) {
 				return 0;
 			}
 
@@ -1138,60 +1127,8 @@ public class NeuralNet {
 		return (double) Math.round(value * 10000) / 10000;
 	}
 
-	private static Function<Double, Double> derivativeOf(Function<Double, Double> f) {
-		double epsilon = 1e-10;
-		return x -> (f.apply(x + epsilon) - f.apply(x)) / epsilon;
-	}
-
 	static enum X {
 		INTEGRATED, VERTICAL
-	}
-
-	private static void plot(List<SeriesDefinition> seriesDefinitions, String xTitle, String yTitle, String chartTitle,
-			String windowTitle, X x) {
-		switch (x) {
-		case INTEGRATED -> {
-			XYSeriesCollection dataset = new XYSeriesCollection();
-			seriesDefinitions.stream().map(NeuralNet::createSeries).forEach(dataset::addSeries);
-			JFreeChart chart = ChartFactory.createXYLineChart(chartTitle, // Title
-					xTitle, // X-axis label
-					yTitle, // Y-axis label
-					dataset, // Dataset
-					PlotOrientation.VERTICAL, // Orientation
-					true, // Include legend
-					true, // Tooltips
-					false // URLs
-			);
-
-			// Display the chart in a frame
-			ChartFrame frame = new ChartFrame(windowTitle, chart);
-			frame.pack();
-			frame.setVisible(true);
-		}
-		case VERTICAL -> {
-			JFrame frame = new JFrame(windowTitle);
-			frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-			frame.setLayout(new GridLayout(2, 1));
-			seriesDefinitions.forEach(def -> {
-				XYSeries series = createSeries(def);
-				XYSeriesCollection dataset = new XYSeriesCollection();
-				dataset.addSeries(series);
-				JFreeChart chart = ChartFactory.createXYLineChart(chartTitle, // Title
-						xTitle, // X-axis label
-						yTitle, // Y-axis label
-						dataset, // Dataset
-						PlotOrientation.VERTICAL, // Orientation
-						true, // Include legend
-						true, // Tooltips
-						false // URLs
-				);
-				frame.add(new ChartPanel(chart));
-//				frame.add(new ChartFrame(windowTitle, chart));
-			});
-			frame.pack();
-			frame.setVisible(true);
-		}
-		}
 	}
 
 	record SeriesDefinition(List<Double> xs, List<Double> ys, String lineTitle) {
@@ -1209,11 +1146,6 @@ public class NeuralNet {
 
 	private static double[] toArray(List<Double> xs) {
 		return xs.stream().mapToDouble(d -> d).toArray();
-	}
-
-	private static Stream<Double> range(double min, double max, double increment) {
-		int size = (int) ((max - min) / increment);
-		return IntStream.range(0, size).mapToObj(i -> (double) i * increment + min);
 	}
 
 	private static <T> void restrict(List<T> list, int expectedSize) {

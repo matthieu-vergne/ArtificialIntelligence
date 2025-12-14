@@ -59,6 +59,7 @@ import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartFrame;
 import org.jfree.chart.ChartPanel;
 import org.jfree.chart.JFreeChart;
+import org.jfree.chart.axis.LogarithmicAxis;
 import org.jfree.chart.axis.ValueAxis;
 import org.jfree.chart.plot.PlotOrientation;
 import org.jfree.chart.plot.XYPlot;
@@ -422,7 +423,7 @@ public class NeuralNet {
 				dataset.put(List.of(x, y), value);
 			}
 
-			AtomicReference<Double> updateStep = new AtomicReference<Double>(0.01);
+			AtomicReference<Double> updateStep = new AtomicReference<Double>(0.001);
 			Supplier<Value> mlpRound = () -> {
 				Value loss = mlp.computeLoss(dataset);
 				loss.backward();
@@ -463,36 +464,14 @@ public class NeuralNet {
 		}
 	}
 
+	record Parts(JPanel panel, Consumer<List<RoundResult>> panelUpdater) {
+	}
+
 	private static void createFrame(FrameConf frameConf, Map<List<Double>, Double> dataset, MLP mlp,
 			Supplier<Value> mlpRound) {
-		ChartPanel visualPanel = createVisualPanel(frameConf.visualConf(), dataset);
+		Parts visualParts = createVisual(frameConf, dataset);
 
-		ChartPanel lossPlotPanel;
-		Consumer<List<RoundResult>> plotUpdater;
-		{
-
-			XYSeriesCollection plotDataset = new XYSeriesCollection();
-			XYSeries series = new XYSeries("Loss");
-			plotDataset.addSeries(series);
-			JFreeChart chart = ChartFactory.createXYLineChart(null, // Title
-					"Rounds", // X-axis
-					"Loss", // Y-axis
-					plotDataset, // Dataset
-					PlotOrientation.VERTICAL, // Orientation
-					false, // Include legend
-					true, // Tooltips
-					false // URLs
-			);
-
-			lossPlotPanel = new ChartPanel(chart);
-
-			plotUpdater = roundResults -> {
-				roundResults.forEach(roundResult -> {
-					series.add(roundResult.round(), roundResult.loss().data().get());
-				});
-				chart.fireChartChanged();
-			};
-		}
+		Parts lossPlotParts = createLossPlot();
 
 		JPanel mlpPanel;
 		Consumer<List<RoundResult>> graphUpdater;
@@ -526,6 +505,42 @@ public class NeuralNet {
 			};
 		}
 
+		Consumer<List<RoundResult>> roundConsumer = graphUpdater//
+				.andThen(lossPlotParts.panelUpdater())//
+				.andThen(visualParts.panelUpdater());
+		JPanel trainPanel = createTrainPanel(frameConf, mlpRound, roundConsumer);
+
+		JTabbedPane screenPane = new JTabbedPane();
+		screenPane.add(visualParts.panel(), "Visual");
+		screenPane.add(lossPlotParts.panel(), "Loss plot");
+		screenPane.add(mlpPanel, "MLP");
+		screenPane.add(new JPanel(), "empty");
+		// To show the headers with each card title
+
+		JFrame frame = new JFrame("MLP");
+		frame.setLayout(new GridBagLayout());
+		{
+			GridBagConstraints constraints = new GridBagConstraints();
+			constraints.gridx = 0;
+			constraints.gridy = GridBagConstraints.RELATIVE;
+			constraints.weightx = 1.0;
+			constraints.weighty = 1.0;
+			constraints.fill = GridBagConstraints.BOTH;
+			frame.add(screenPane, constraints);
+			constraints.weightx = 1.0;
+			constraints.weighty = 0.0;
+			constraints.fill = GridBagConstraints.HORIZONTAL;
+			frame.add(trainPanel, constraints);
+		}
+
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.pack();
+		frame.setSize(840, 930);
+		frame.setVisible(true);
+	}
+
+	private static JPanel createTrainPanel(FrameConf frameConf, Supplier<Value> mlpRound,
+			Consumer<List<RoundResult>> roundConsumer) {
 		JTextField roundsLimitField = FieldBuilder.buildFieldFor(frameConf.runConf().roundsLimit())//
 				.intoText(src -> src.get().map(Object::toString).orElse(""))//
 				.as(Long::parseLong).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
@@ -554,12 +569,12 @@ public class NeuralNet {
 			});
 		};
 
-		JToggleButton runButton = new JToggleButton();
-		Consumer<List<RoundResult>> roundConsumer = lossFieldUpdater.andThen(graphUpdater).andThen(plotUpdater);
-		runButton.setAction(createTrainAction(frameConf, mlpRound, visualPanel, roundConsumer, runButton));
+		JToggleButton trainButton = new JToggleButton();
+		roundConsumer = lossFieldUpdater.andThen(roundConsumer);
+		trainButton.setAction(createTrainAction(frameConf, mlpRound, roundConsumer, trainButton));
 
-		JPanel runPanel = new JPanel();
-		runPanel.setLayout(new GridBagLayout());
+		JPanel trainPanel = new JPanel();
+		trainPanel.setLayout(new GridBagLayout());
 		{
 			GridBagConstraints constraints = new GridBagConstraints();
 			constraints.gridx = GridBagConstraints.RELATIVE;
@@ -568,127 +583,80 @@ public class NeuralNet {
 			constraints.weighty = 0.0;
 			constraints.fill = GridBagConstraints.HORIZONTAL;
 			constraints.weightx = 1.0;
-			runPanel.add(runButton, constraints);
+			trainPanel.add(trainButton, constraints);
 			constraints.weightx = 1.0;
-			runPanel.add(roundsLimitField, constraints);
+			trainPanel.add(roundsLimitField, constraints);
 			constraints.weightx = 0.0;
-			runPanel.add(new JLabel("rounds by batch of"), constraints);
+			trainPanel.add(new JLabel("rounds by batch of"), constraints);
 			constraints.weightx = 1.0;
-			runPanel.add(batchSizeField, constraints);
+			trainPanel.add(batchSizeField, constraints);
 			constraints.weightx = 0.0;
-			runPanel.add(new JLabel("and step of"), constraints);
+			trainPanel.add(new JLabel("and step of"), constraints);
 			constraints.weightx = 1.0;
-			runPanel.add(updateStepField, constraints);
+			trainPanel.add(updateStepField, constraints);
 			constraints.weightx = 0.0;
-			runPanel.add(new JLabel("|"), constraints);
+			trainPanel.add(new JLabel("|"), constraints);
 			constraints.weightx = 0.0;
-			runPanel.add(new JLabel("Round:"), constraints);
+			trainPanel.add(new JLabel("Round:"), constraints);
 			constraints.weightx = 1.0;
-			runPanel.add(roundField, constraints);
+			trainPanel.add(roundField, constraints);
 			constraints.weightx = 0.0;
-			runPanel.add(new JLabel("Loss:"), constraints);
-			constraints.weightx = 1.0;
-			runPanel.add(lossField, constraints);
+			trainPanel.add(new JLabel("Loss:"), constraints);
+			constraints.weightx = 3.0;// Bigger because usually more digits
+			trainPanel.add(lossField, constraints);
 		}
-
-		JTabbedPane screenPane = new JTabbedPane();
-		screenPane.add(visualPanel, "Visual");
-		screenPane.add(lossPlotPanel, "Loss plot");
-		screenPane.add(mlpPanel, "MLP");
-		screenPane.add(new JPanel(), "empty");
-		// To show the headers with each card title
-
-		JFrame frame = new JFrame("MLP");
-		frame.setLayout(new GridBagLayout());
-		{
-			GridBagConstraints constraints = new GridBagConstraints();
-			constraints.gridx = 0;
-			constraints.gridy = GridBagConstraints.RELATIVE;
-			constraints.weightx = 1.0;
-			constraints.weighty = 1.0;
-			constraints.fill = GridBagConstraints.BOTH;
-			frame.add(screenPane, constraints);
-			constraints.weightx = 1.0;
-			constraints.weighty = 0.0;
-			constraints.fill = GridBagConstraints.HORIZONTAL;
-			frame.add(runPanel, constraints);
-		}
-
-		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-		frame.pack();
-		frame.setSize(800, 600);
-		frame.setVisible(true);
+		return trainPanel;
 	}
 
-	private static AbstractAction createTrainAction(FrameConf frameConf, Supplier<Value> mlpRound,
-			ChartPanel chartPanel, Consumer<List<RoundResult>> roundConsumer, JToggleButton runButton) {
-		return new AbstractAction("Train") {
-			long round = 0;
+	private static Parts createLossPlot() {
+		XYSeriesCollection chartDataset = new XYSeriesCollection();
+		XYSeries chartSeries = new XYSeries("Loss");
+		chartDataset.addSeries(chartSeries);
+		JFreeChart chart = ChartFactory.createXYLineChart(null, // Title
+				"Rounds", // X-axis
+				"Loss", // Y-axis
+				chartDataset, // Dataset
+				PlotOrientation.VERTICAL, // Orientation
+				false, // Include legend
+				true, // Tooltips
+				false // URLs
+		);
+		// We often start with big numbers and end with small numbers
+		// Use log scale to better show everything
+		XYPlot xyPlot = chart.getXYPlot();
+		ValueAxis initialAxis = xyPlot.getRangeAxis();
+		xyPlot.setRangeAxis(new LogarithmicAxis(initialAxis.getLabel()));
 
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				if (!runButton.isSelected()) {
-					// Wait for the stuff to stop
-				} else {
-					AtomicReference<Optional<Long>> roundsLimit = frameConf.runConf().roundsLimit();
-					AtomicLong batchSize = frameConf.runConf().batchSize();
-					SwingUtilities.invokeLater(new Runnable() {
-						@Override
-						public void run() {
-							if (!runButton.isSelected()) {
-								// Don't request any more run
-							} else {
-								if (roundsLimit.get().isPresent() && roundsLimit.get().get() <= round) {
-									// Untoggle automatically
-									runButton.setSelected(false);
-								} else {
-									List<RoundResult> results = new LinkedList<>();
-									for (int batchedRound = 0; runButton.isSelected()
-											&& batchedRound < batchLimit(batchedRound, batchSize, round,
-													roundsLimit); batchedRound++) {
-										round++;
-										Value loss = mlpRound.get();
-										RoundResult result = new RoundResult(round, loss);
-										results.add(result);
-									}
-									roundConsumer.accept(results);
-									chartPanel.getChart().fireChartChanged();
-									chartPanel.repaint();
-									SwingUtilities.invokeLater(this);
-								}
-							}
-						}
-
-						private long batchLimit(int batchedRound, AtomicLong batchSize, long round,
-								AtomicReference<Optional<Long>> roundsLimit) {
-							long roundAtStartOfBatch = round - batchedRound;
-							long totalLimit = roundsLimit.get().orElse(Long.MAX_VALUE);
-							long batchLimit = batchSize.get();
-							return Math.min(totalLimit - roundAtStartOfBatch, batchLimit);
-						}
-					});
-				}
-			}
+		Consumer<List<RoundResult>> lossPlotUpdater = roundResults -> {
+			roundResults.forEach(roundResult -> {
+				chartSeries.add(roundResult.round(), roundResult.loss().data().get());
+			});
+			chart.fireChartChanged();
 		};
+
+		ChartPanel chartPanel = new ChartPanel(chart);
+
+		return new Parts(chartPanel, lossPlotUpdater);
 	}
 
-	private static ChartPanel createVisualPanel(VisualConf chartConf, Map<List<Double>, Double> dataset) {
-		BiFunction<VisualDatasetConf, Integer, List<Double>> valuesExtractor = (datasetConf, index) -> {
+	private static Parts createVisual(FrameConf frameConf, Map<List<Double>, Double> dataset) {
+		VisualConf chartConf = frameConf.visualConf();
+		BiFunction<VisualDatasetConf, Integer, List<Double>> valuesExtractor = (datasetConf1, index) -> {
 			return dataset.entrySet().stream()//
-					.filter(entry -> datasetConf.predicate().test(entry.getValue()))//
+					.filter(entry -> datasetConf1.predicate().test(entry.getValue()))//
 					.map(Entry::getKey)//
 					.map(list -> list.get(index))//
 					.toList();
 		};
-		Function<VisualDatasetConf, SeriesDefinition> seriesFactory = datasetConf -> {
+		Function<VisualDatasetConf, SeriesDefinition> seriesFactory = datasetConf3 -> {
 			return new SeriesDefinition(//
-					valuesExtractor.apply(datasetConf, chartConf.xIndex()), //
-					valuesExtractor.apply(datasetConf, chartConf.yIndex()), //
-					datasetConf.label());
+					valuesExtractor.apply(datasetConf3, chartConf.xIndex()), //
+					valuesExtractor.apply(datasetConf3, chartConf.yIndex()), //
+					datasetConf3.label());
 		};
 		Map<XYSeries, Color> coloredSeries = chartConf.datasetConfs().stream()//
 				.collect(toMap(//
-						datasetConf -> createSeries(seriesFactory.apply(datasetConf)), //
+						datasetConf2 -> createSeries(seriesFactory.apply(datasetConf2)), //
 						datasetConf -> datasetConf.color()//
 				));
 		XYSeriesCollection chartDataset = new XYSeriesCollection();
@@ -714,7 +682,86 @@ public class NeuralNet {
 
 		addContour(chartConf.contourConf(), plot, createContourPainter(chartConf));
 
-		return new ChartPanel(chart);
+		Consumer<List<RoundResult>> visualUpdater = _ -> {
+			chart.fireChartChanged();
+		};
+
+		ChartPanel visualPanel = new ChartPanel(chart);
+
+		return new Parts(visualPanel, visualUpdater);
+	}
+
+	private static AbstractAction createTrainAction(FrameConf frameConf, Supplier<Value> mlpRound,
+			Consumer<List<RoundResult>> roundConsumer, JToggleButton runButton) {
+		return new AbstractAction("Train") {
+			long round = 0;
+
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				if (!runButton.isSelected()) {
+					// Wait for the stuff to stop
+				} else {
+					AtomicReference<Optional<Long>> roundsLimit = frameConf.runConf().roundsLimit();
+					AtomicLong batchSize = frameConf.runConf().batchSize();
+					SwingUtilities.invokeLater(new Runnable() {
+						@Override
+						public void run() {
+							if (isTrainingStopped()) {
+								sendDataAndClean();
+							} else if (isLimitReached()) {
+								sendDataAndClean();
+								stopTraining();
+							} else if (isBatchFinished()) {
+								sendDataAndClean();
+								continueTraining();
+							} else {
+								computeRound();
+								continueTraining();
+							}
+						}
+
+						private void continueTraining() {
+							SwingUtilities.invokeLater(this);
+						}
+
+						private void stopTraining() {
+							runButton.setSelected(false);
+						}
+
+						private boolean isTrainingStopped() {
+							return !runButton.isSelected();
+						}
+
+						private int batchedRound = 0;
+						private final List<RoundResult> results = new LinkedList<>();
+
+						private void computeRound() {
+							batchedRound++;
+							round++;
+							Value loss = mlpRound.get();
+							results.add(new RoundResult(round, loss));
+						}
+
+						private void sendDataAndClean() {
+							roundConsumer.accept(results);
+							results.clear();
+							batchedRound = 0;
+						}
+
+						private boolean isBatchFinished() {
+							long totalLimit = roundsLimit.get().orElse(Long.MAX_VALUE);
+							long batchLimit = batchSize.get();
+							long roundAtEndOfBatch = round - batchedRound + batchLimit;
+							return round >= Math.min(totalLimit, roundAtEndOfBatch);
+						}
+
+						private boolean isLimitReached() {
+							return roundsLimit.get().isPresent() && roundsLimit.get().get() <= round;
+						}
+					});
+				}
+			}
+		};
 	}
 
 	private static void addContour(ContourConf contourConf, XYPlot plot, Function<Double, Paint> contourPainter) {

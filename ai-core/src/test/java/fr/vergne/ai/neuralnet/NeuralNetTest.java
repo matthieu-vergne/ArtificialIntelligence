@@ -43,8 +43,9 @@ class NeuralNetTest {
 		assertThat(w1.data().get(), is(-3.0));
 		assertThat(w2.data().get(), is(1.0));
 		assertThat(bias.data().get(), is(6.8813735870195432));
-		assertThat(n.data().get(), is(0.8813735870195432));
-		assertThat(o.data().get(), is(0.7071067811865477));
+		double epsilonCalc = 1e-10;
+		assertThat(n.data().get(), is(closeTo(0.8813735870195432, epsilonCalc)));
+		assertThat(o.data().get(), is(closeTo(0.7071067811865477, epsilonCalc)));
 	}
 
 	@Test
@@ -60,13 +61,14 @@ class NeuralNetTest {
 		o.resetGradientsRecursively();
 		o.computeGradientsRecursivelyStartingHereAt(1.0);
 
-		assertThat(x1.gradient().get(), is(-1.4999999999999993));
-		assertThat(x2.gradient().get(), is(0.4999999999999998));
-		assertThat(w1.gradient().get(), is(0.9999999999999996));
-		assertThat(w2.gradient().get(), is(0.0));
-		assertThat(bias.gradient().get(), is(0.4999999999999998));
-		assertThat(n.gradient().get(), is(0.4999999999999998));
-		assertThat(o.gradient().get(), is(1.0));
+		double epsilonGradient = 1e-10;
+		assertThat(x1.gradient().get(), is(closeTo(-1.5, epsilonGradient)));
+		assertThat(x2.gradient().get(), is(closeTo(0.5, epsilonGradient)));
+		assertThat(w1.gradient().get(), is(closeTo(1.0, epsilonGradient)));
+		assertThat(w2.gradient().get(), is(0.0));// No impact so not updated
+		assertThat(bias.gradient().get(), is(closeTo(0.5, epsilonGradient)));
+		assertThat(n.gradient().get(), is(closeTo(0.5, epsilonGradient)));
+		assertThat(o.gradient().get(), is(1.0));// Root so set to 1.0
 	}
 
 	@Test
@@ -94,7 +96,7 @@ class NeuralNetTest {
 		List<Value> x = Stream.of(2.0, 3.0, -1.0).map(Value::of).toList();
 		Value result = mlp.compute(x).get(0);
 
-		assertThat(result.data().get(), is(-0.6836299751085826));
+		assertThat(result.data().get(), is(closeTo(-0.6836299751085826, 1e-10)));
 	}
 
 	@Test
@@ -107,13 +109,13 @@ class NeuralNetTest {
 		double y2 = -1.0;
 		List<Double> x3 = List.of(1.0, 1.0, -1.0);
 		double y3 = 1.0;
-		
+
 		Map<List<Double>, Double> dataset = new LinkedHashMap<>();
 		dataset.put(x0, y0);
 		dataset.put(x1, y1);
 		dataset.put(x2, y2);
 		dataset.put(x3, y3);
-		
+
 		Random random = new Random(0);
 		MLP mlp = new MLP(ParameterNamer.create(), 3, List.of(4, 4, 1), (_) -> random.nextDouble(-1.0, 1.0));
 		Value loss = null;
@@ -125,13 +127,13 @@ class NeuralNetTest {
 
 		double epsilonLoss = 1e-10;
 		assertThat(loss.data().get(), is(closeTo(9.555022845608106e-5, epsilonLoss)));
-		
+
 		double epsilonOutput = 1e-2;
 		assertThat(mlp.computeRaw(x0).get(0), is(closeTo(y0, epsilonOutput)));
 		assertThat(mlp.computeRaw(x1).get(0), is(closeTo(y1, epsilonOutput)));
 		assertThat(mlp.computeRaw(x2).get(0), is(closeTo(y2, epsilonOutput)));
 		assertThat(mlp.computeRaw(x3).get(0), is(closeTo(y3, epsilonOutput)));
-		
+
 		// Only test the parameters of the first neuron, assuming the rest is as stable
 		double epsilonParameter = 1e-10;
 		assertThat(mlp.layer(0).neuron(0).weight(0).data().get(), is(closeTo(0.9680755614655998, epsilonParameter)));

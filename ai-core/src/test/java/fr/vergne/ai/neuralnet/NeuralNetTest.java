@@ -90,7 +90,7 @@ class NeuralNetTest {
 	@Test
 	void testSimpleMlp() {
 		Random random = new Random(0);
-		MLP mlp = new MLP(ParameterNamer.create(), 3, List.of(4, 4, 1), (label) -> random.nextDouble(-1.0, 1.0));
+		MLP mlp = new MLP(ParameterNamer.create(), 3, List.of(4, 4, 1), (_) -> random.nextDouble(-1.0, 1.0));
 		List<Value> x = Stream.of(2.0, 3.0, -1.0).map(Value::of).toList();
 		Value result = mlp.compute(x).get(0);
 
@@ -115,7 +115,7 @@ class NeuralNetTest {
 		dataset.put(x3, y3);
 		
 		Random random = new Random(0);
-		MLP mlp = new MLP(ParameterNamer.create(), 3, List.of(4, 4, 1), (label) -> random.nextDouble(-1.0, 1.0));
+		MLP mlp = new MLP(ParameterNamer.create(), 3, List.of(4, 4, 1), (_) -> random.nextDouble(-1.0, 1.0));
 		Value loss = null;
 		for (int i = 0; i < 30; i++) {
 			loss = mlp.computeLoss(dataset);

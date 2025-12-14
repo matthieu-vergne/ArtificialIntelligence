@@ -18,9 +18,9 @@ interface FieldBuilder<T> {
 				return new TextFieldBuilder<>() {
 
 					private Consumer<JTextField> overallDefault;
-					private BiConsumer<JTextField, T> noTextDefault = (textField, value) -> overallDefault
+					private BiConsumer<JTextField, T> noTextDefault = (textField, _) -> overallDefault
 							.accept(textField);
-					private BiConsumer<JTextField, String> textConsumer = (textField, text) -> overallDefault
+					private BiConsumer<JTextField, String> textConsumer = (textField, _) -> overallDefault
 							.accept(textField);
 
 					@Override
@@ -52,13 +52,13 @@ interface FieldBuilder<T> {
 
 					@Override
 					public TextFieldBuilder<T> whenEmptyApply(Consumer<T> noTextDefault) {
-						this.noTextDefault = (textField, value) -> noTextDefault.accept(value);
+						this.noTextDefault = (_, value) -> noTextDefault.accept(value);
 						return this;
 					}
 
 					@Override
 					public TextFieldBuilder<T> whenEmptyShow(Consumer<JTextField> noTextDefault) {
-						this.noTextDefault = (textField, value) -> noTextDefault.accept(textField);
+						this.noTextDefault = (textField, _) -> noTextDefault.accept(textField);
 						return this;
 					}
 

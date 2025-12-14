@@ -74,10 +74,10 @@ public class NeuralNet {
 
 	enum Operator {
 		NONE(null, //
-				(operands) -> {
+				(_) -> {
 					throw new RuntimeException("Should not be called");
 				}, //
-				(parentGradient, operands) ->
+				(_, operands) ->
 
 				{
 					restrict(operands, 0);// Nothing to resolve
@@ -400,9 +400,9 @@ public class NeuralNet {
 			Random random = new Random(0);
 			// TODO Provide separate outputs (like inputs)
 			// TODO Parallelize computation
-			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(4, 1), (label) -> random.nextDouble(-1.0, 1.0));
-//			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(20, 1), (label) -> random.nextDouble(-1.0, 1.0));
-//			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1), (label) -> random.nextDouble(-1.0, 1.0));
+			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(4, 1), (_) -> random.nextDouble(-1.0, 1.0));
+//			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(20, 1), (_) -> random.nextDouble(-1.0, 1.0));
+//			MLP mlp = new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1), (_) -> random.nextDouble(-1.0, 1.0));
 			Map<List<Double>, Double> dataset = new LinkedHashMap<>();
 			for (int i = 0; i < 100; i++) {
 				double x = random.nextDouble(-5, 5);
@@ -918,7 +918,7 @@ public class NeuralNet {
 	private static void createDot(Value value, Path dotPath) {
 		File dotFile = dotPath.toFile();
 		AtomicInteger counter = new AtomicInteger();
-		Function<Value, String> valueIdSupplier = memoize(val -> "N" + counter.getAndIncrement());
+		Function<Value, String> valueIdSupplier = memoize((_) -> "N" + counter.getAndIncrement());
 		try (PrintWriter dotWriter = new PrintWriter(dotFile)) {
 			dotWriter.println("digraph G {");
 			dotWriter.println("rankdir=LR");// Left to right
@@ -1051,7 +1051,7 @@ public class NeuralNet {
 	}
 
 	private static <T> BinaryOperator<T> noCombiner() {
-		return (a, b) -> {
+		return (_, _) -> {
 			throw new RuntimeException("Not implemented");
 		};
 	}

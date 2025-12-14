@@ -17,6 +17,8 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -66,6 +68,7 @@ import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.renderer.LookupPaintScale;
 import org.jfree.chart.renderer.xy.XYBlockRenderer;
 import org.jfree.chart.renderer.xy.XYItemRenderer;
+import org.jfree.chart.ui.RectangleEdge;
 import org.jfree.data.DomainOrder;
 import org.jfree.data.general.DatasetChangeListener;
 import org.jfree.data.general.DatasetGroup;
@@ -424,16 +427,25 @@ public class NeuralNet {
 			}
 
 			AtomicReference<Double> updateStep = new AtomicReference<Double>(0.001);
-			Supplier<Value> mlpRound = () -> {
+			Supplier<RoundData> mlpRound = () -> {
+				Instant start = Instant.now();
 				Value loss = mlp.computeLoss(dataset);
+				Instant computeTime = Instant.now();
 				loss.backward();
+				Instant backwardTime = Instant.now();
 				mlp.updateParameters(updateStep.get());
-				return loss;
+				Instant updateTime = Instant.now();
+				return new RoundData(//
+						loss, //
+						Duration.between(start, computeTime), //
+						Duration.between(computeTime, backwardTime), //
+						Duration.between(backwardTime, updateTime)//
+				);
 			};
 
 			AtomicReference<Optional<Long>> roundsLimit = new AtomicReference<>(Optional.empty());
 			AtomicLong batchSize = new AtomicLong(1);
-			RunConf runConf = new RunConf(roundsLimit, batchSize, updateStep);
+			TrainConf trainConf = new TrainConf(roundsLimit, batchSize, updateStep);
 
 			Collection<VisualDatasetConf> datasetConfs = List.of(//
 					new VisualDatasetConf("1.0", value -> value > 0, Color.RED), //
@@ -451,7 +463,18 @@ public class NeuralNet {
 			Color defaultColor = Color.WHITE;
 			VisualConf chartConf = new VisualConf(xIndex, yIndex, defaultColor, datasetConfs, contourConf);
 
-			FrameConf frameConf = new FrameConf(runConf, chartConf);
+			PlotUtils.WindowFactory windowFactory = switch (2) {
+			case 1 -> PlotUtils.createNoWindowFactory();
+			case 2 -> PlotUtils.createFixedWindowFactory(100);
+			case 3 -> PlotUtils.createSlidingWindowFactory(10);
+			default -> throw new IllegalArgumentException("Unexpected window factory");
+			};
+			RectangleEdge legendPosition = RectangleEdge.TOP;
+			TimePlotConf timePlotConf = new TimePlotConf(windowFactory, legendPosition);
+
+			LossPlotConf lossPlotConf = new LossPlotConf(windowFactory);
+
+			FrameConf frameConf = new FrameConf(trainConf, chartConf, lossPlotConf, timePlotConf);
 
 			createFrame(frameConf, dataset, mlp, mlpRound);
 		} else {
@@ -468,10 +491,12 @@ public class NeuralNet {
 	}
 
 	private static void createFrame(FrameConf frameConf, Map<List<Double>, Double> dataset, MLP mlp,
-			Supplier<Value> mlpRound) {
+			Supplier<RoundData> mlpRound) {
 		Parts visualParts = createVisual(frameConf, dataset);
 
-		Parts lossPlotParts = createLossPlot();
+		Parts lossPlotParts = createLossPlot(frameConf.lossPlotConf());
+
+		Parts timePlotParts = createTimePlot(frameConf.timePlotConf());
 
 		JPanel mlpPanel;
 		Consumer<List<RoundResult>> graphUpdater;
@@ -489,7 +514,7 @@ public class NeuralNet {
 					if (false) {
 						String fileName = "graph";
 						Path dotPath = createTempPath(fileName, "dot");
-						createDot(roundResult.loss(), dotPath);
+						createDot(roundResult.data().loss(), dotPath);
 
 						Path svgPath = createTempPath(fileName, "svg");
 						dotToFile(dotPath, svgPath, "svg");
@@ -507,12 +532,14 @@ public class NeuralNet {
 
 		Consumer<List<RoundResult>> roundConsumer = graphUpdater//
 				.andThen(lossPlotParts.panelUpdater())//
+				.andThen(timePlotParts.panelUpdater())//
 				.andThen(visualParts.panelUpdater());
 		JPanel trainPanel = createTrainPanel(frameConf, mlpRound, roundConsumer);
 
 		JTabbedPane screenPane = new JTabbedPane();
 		screenPane.add(visualParts.panel(), "Visual");
 		screenPane.add(lossPlotParts.panel(), "Loss plot");
+		screenPane.add(timePlotParts.panel(), "Time plot");
 		screenPane.add(mlpPanel, "MLP");
 		screenPane.add(new JPanel(), "empty");
 		// To show the headers with each card title
@@ -539,22 +566,22 @@ public class NeuralNet {
 		frame.setVisible(true);
 	}
 
-	private static JPanel createTrainPanel(FrameConf frameConf, Supplier<Value> mlpRound,
+	private static JPanel createTrainPanel(FrameConf frameConf, Supplier<RoundData> mlpRound,
 			Consumer<List<RoundResult>> roundConsumer) {
-		JTextField roundsLimitField = FieldBuilder.buildFieldFor(frameConf.runConf().roundsLimit())//
+		JTextField roundsLimitField = FieldBuilder.buildFieldFor(frameConf.trainConf().roundsLimit())//
 				.intoText(src -> src.get().map(Object::toString).orElse(""))//
 				.as(Long::parseLong).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
 				.whenEmptyApply(src -> src.set(Optional.empty()))//
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
-		JTextField batchSizeField = FieldBuilder.buildFieldFor(frameConf.runConf().batchSize())//
+		JTextField batchSizeField = FieldBuilder.buildFieldFor(frameConf.trainConf().batchSize())//
 				.intoText(src -> Long.toString(src.get()))//
 				.as(Long::parseLong).ifIs(value -> value > 0).thenApply(AtomicLong::set)//
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
-		JTextField updateStepField = FieldBuilder.buildFieldFor(frameConf.runConf().updateStep())//
+		JTextField updateStepField = FieldBuilder.buildFieldFor(frameConf.trainConf().updateStep())//
 				.intoText(src -> Double.toString(src.get()))//
 				.as(Double::parseDouble).ifIs(value -> value > 0).thenApply(AtomicReference::set)//
 				.otherwiseShow(FieldBuilder::error)//
@@ -565,7 +592,7 @@ public class NeuralNet {
 		Consumer<List<RoundResult>> lossFieldUpdater = roundResults -> {
 			roundResults.forEach(roundResult -> {
 				roundField.setText(Long.toString(roundResult.round()));
-				lossField.setText(roundResult.loss().data().get().toString());
+				lossField.setText(roundResult.data().loss().data().get().toString());
 			});
 		};
 
@@ -608,7 +635,63 @@ public class NeuralNet {
 		return trainPanel;
 	}
 
-	private static Parts createLossPlot() {
+	private static Parts createTimePlot(TimePlotConf timePlotConf) {
+		XYSeriesCollection chartDataset = new XYSeriesCollection();
+		XYSeries computeSeries = new XYSeries("Compute");
+		XYSeries backwardSeries = new XYSeries("Backward");
+		XYSeries updateSeries = new XYSeries("Update");
+		chartDataset.addSeries(computeSeries);
+		chartDataset.addSeries(backwardSeries);
+		chartDataset.addSeries(updateSeries);
+		JFreeChart chart = ChartFactory.createXYLineChart(null, // Title
+				"Rounds", // X-axis
+				"Time (ns)", // Y-axis
+				chartDataset, // Dataset
+				PlotOrientation.VERTICAL, // Orientation
+				true, // Include legend
+				true, // Tooltips
+				false // URLs
+		);
+		// We often start with big numbers and end with small numbers
+		// Use log scale to better show everything
+		XYPlot plot = chart.getXYPlot();
+		ValueAxis initialAxis = plot.getRangeAxis();
+		plot.setRangeAxis(new LogarithmicAxis(initialAxis.getLabel()));
+
+		// To place the legend at the top
+		chart.getLegend().setPosition(timePlotConf.legendPosition());
+
+		PlotUtils.WindowFactory windowFactory = timePlotConf.windowFactory();
+
+		PlotUtils.Window<Long, Long> computeWindow = windowFactory
+				.createLongLongWindow((round, nanos) -> computeSeries.add(round, nanos));
+		PlotUtils.Window<Long, Long> backwardWindow = windowFactory
+				.createLongLongWindow((round, nanos) -> backwardSeries.add(round, nanos));
+		PlotUtils.Window<Long, Long> updateWindow = windowFactory
+				.createLongLongWindow((round, nanos) -> updateSeries.add(round, nanos));
+		Function<RoundResult, BiConsumer<PlotUtils.Window<Long, Long>, Function<RoundData, Duration>>> seriesUpdaterFactory = roundResult -> {
+			return (seriesWindow, durationExtractor) -> {
+				long round = roundResult.round();
+				long nanos = durationExtractor.apply(roundResult.data()).toNanos();
+				seriesWindow.feedWindow(round, nanos);
+			};
+		};
+		Consumer<List<RoundResult>> lossPlotUpdater = roundResults -> {
+			roundResults.forEach(roundResult -> {
+				var seriesUpdater = seriesUpdaterFactory.apply(roundResult);
+				seriesUpdater.accept(computeWindow, RoundData::computeDuration);
+				seriesUpdater.accept(backwardWindow, RoundData::backwardDuration);
+				seriesUpdater.accept(updateWindow, RoundData::updateDuration);
+			});
+			chart.fireChartChanged();
+		};
+
+		ChartPanel chartPanel = new ChartPanel(chart);
+
+		return new Parts(chartPanel, lossPlotUpdater);
+	}
+
+	private static Parts createLossPlot(LossPlotConf lossPlotConf) {
 		XYSeriesCollection chartDataset = new XYSeriesCollection();
 		XYSeries chartSeries = new XYSeries("Loss");
 		chartDataset.addSeries(chartSeries);
@@ -627,9 +710,13 @@ public class NeuralNet {
 		ValueAxis initialAxis = xyPlot.getRangeAxis();
 		xyPlot.setRangeAxis(new LogarithmicAxis(initialAxis.getLabel()));
 
+		PlotUtils.Window<Long, Double> window = lossPlotConf.windowFactory()
+				.createLongDoubleWindow((round, loss) -> chartSeries.add(round, loss));
 		Consumer<List<RoundResult>> lossPlotUpdater = roundResults -> {
 			roundResults.forEach(roundResult -> {
-				chartSeries.add(roundResult.round(), roundResult.loss().data().get());
+				long round = roundResult.round();
+				double loss = roundResult.data().loss().data().get();
+				window.feedWindow(round, loss);
 			});
 			chart.fireChartChanged();
 		};
@@ -691,7 +778,7 @@ public class NeuralNet {
 		return new Parts(visualPanel, visualUpdater);
 	}
 
-	private static AbstractAction createTrainAction(FrameConf frameConf, Supplier<Value> mlpRound,
+	private static AbstractAction createTrainAction(FrameConf frameConf, Supplier<RoundData> mlpRound,
 			Consumer<List<RoundResult>> roundConsumer, JToggleButton runButton) {
 		return new AbstractAction("Train") {
 			long round = 0;
@@ -701,8 +788,8 @@ public class NeuralNet {
 				if (!runButton.isSelected()) {
 					// Wait for the stuff to stop
 				} else {
-					AtomicReference<Optional<Long>> roundsLimit = frameConf.runConf().roundsLimit();
-					AtomicLong batchSize = frameConf.runConf().batchSize();
+					AtomicReference<Optional<Long>> roundsLimit = frameConf.trainConf().roundsLimit();
+					AtomicLong batchSize = frameConf.trainConf().batchSize();
 					SwingUtilities.invokeLater(new Runnable() {
 						@Override
 						public void run() {
@@ -738,8 +825,8 @@ public class NeuralNet {
 						private void computeRound() {
 							batchedRound++;
 							round++;
-							Value loss = mlpRound.get();
-							results.add(new RoundResult(round, loss));
+							RoundData data = mlpRound.get();
+							results.add(new RoundResult(round, data));
 						}
 
 						private void sendDataAndClean() {
@@ -796,7 +883,7 @@ public class NeuralNet {
 		return contourRenderer;
 	}
 
-	record RunConf(//
+	record TrainConf(//
 			AtomicReference<Optional<Long>> roundsLimit, //
 			AtomicLong batchSize, //
 			AtomicReference<Double> updateStep//
@@ -826,9 +913,17 @@ public class NeuralNet {
 	) {
 	}
 
+	record TimePlotConf(PlotUtils.WindowFactory windowFactory, RectangleEdge legendPosition) {
+	}
+
+	record LossPlotConf(PlotUtils.WindowFactory windowFactory) {
+	}
+
 	record FrameConf(//
-			RunConf runConf, //
-			VisualConf visualConf //
+			TrainConf trainConf, //
+			VisualConf visualConf, //
+			LossPlotConf lossPlotConf, //
+			TimePlotConf timePlotConf//
 	) {
 	}
 
@@ -1170,6 +1265,9 @@ public class NeuralNet {
 	record ContourDimension(double min, double max, int resolution) {
 	}
 
-	record RoundResult(long round, Value loss) {
+	record RoundData(Value loss, Duration computeDuration, Duration backwardDuration, Duration updateDuration) {
+	}
+
+	record RoundResult(long round, RoundData data) {
 	}
 }

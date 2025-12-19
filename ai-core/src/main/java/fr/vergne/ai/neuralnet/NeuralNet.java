@@ -23,7 +23,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +40,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -66,6 +66,7 @@ import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.renderer.LookupPaintScale;
 import org.jfree.chart.renderer.xy.XYBlockRenderer;
 import org.jfree.chart.renderer.xy.XYItemRenderer;
+import org.jfree.chart.ui.RectangleAnchor;
 import org.jfree.chart.ui.RectangleEdge;
 import org.jfree.data.DomainOrder;
 import org.jfree.data.general.DatasetChangeListener;
@@ -409,19 +410,14 @@ public class NeuralNet {
 		case 3 -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1), (_) -> random.nextDouble(-1.0, 1.0));
 		default -> throw new IllegalArgumentException("Unexpected MLP");
 		};
-		Map<List<Double>, Double> dataset = new LinkedHashMap<>();
-		for (int i = 0; i < 100; i++) {
-			double x = random.nextDouble(-5, 5);
-			double y = random.nextDouble(-5, 5);
-			double value = switch (1) {
-			case 1 -> Math.signum(Math.sqrt(x * x + y * y) - 3);
-			case 2 -> Math.signum(y - polynom(x, List.of(-2.0, 5.0, 4.0, -3.0)));
-			case 3 -> Math.signum(y - Math.sin(x) * 5);
-			case 4 -> Math.signum(y - Math.sin(10 * x) * 5);
-			default -> throw new IllegalArgumentException("Unexpected dataset outputs");
-			};
-			dataset.put(List.of(x, y), value);
-		}
+		Map<List<Double>, Double> dataset = switch (1) {
+		case 1 -> Dataset.circle(random);
+		case 2 -> Dataset.columns1(random);
+		case 3 -> Dataset.columns2(random);
+		case 4 -> Dataset.steepColumns(random);
+		case 5 -> Dataset.moons(random);
+		default -> throw new IllegalArgumentException("Unexpected dataset outputs");
+		};
 
 		AtomicReference<Double> updateStep = new AtomicReference<Double>(0.001);
 		Supplier<RoundData> mlpRound = () -> {
@@ -450,15 +446,16 @@ public class NeuralNet {
 		);
 
 		Resolution contourResolution = new Resolution(100, 100);
+		BiFunction<Color, Double, Color> colorTransformation = (color, value) -> adaptSaturation(color, Math.abs(value)*0.6);
 		BinaryOperator<Double> contourFunction = (x, y) -> {
 			return mlp.computeRaw(List.of(x, y)).get(0);
 		};
-		ContourConf contourConf = new ContourConf("MLP", contourResolution, contourFunction);
+		ContourConf contourConf = new ContourConf("MLP", contourResolution, colorTransformation, contourFunction);
 
 		int xIndex = 0;
 		int yIndex = 1;
-		Color defaultColor = Color.WHITE;
-		VisualConf chartConf = new VisualConf(xIndex, yIndex, defaultColor, datasetConfs, contourConf);
+		Color defaultColor = Color.BLACK;// transparent
+		VisualConf visualConf = new VisualConf(xIndex, yIndex, defaultColor, datasetConfs, contourConf);
 
 		PlotUtils.WindowFactory windowFactory = switch (2) {
 		case 1 -> PlotUtils.createNoWindowFactory();
@@ -471,9 +468,15 @@ public class NeuralNet {
 
 		LossPlotConf lossPlotConf = new LossPlotConf(windowFactory);
 
-		FrameConf frameConf = new FrameConf(trainConf, chartConf, lossPlotConf, timePlotConf);
+		FrameConf frameConf = new FrameConf(trainConf, visualConf, lossPlotConf, timePlotConf);
 
 		createFrame(frameConf, dataset, mlp, mlpRound);
+	}
+
+	private static Color adaptSaturation(Color color, double factor) {
+		float[] hsb = Color.RGBtoHSB(color.getRed(), color.getGreen(), color.getBlue(), null);
+		hsb[1] *= factor;
+		return Color.getHSBColor(hsb[0], hsb[1], hsb[2]);
 	}
 
 	record Parts(JPanel panel, Consumer<List<RoundResult>> panelUpdater) {
@@ -716,7 +719,7 @@ public class NeuralNet {
 	}
 
 	private static Parts createVisual(FrameConf frameConf, Map<List<Double>, Double> dataset) {
-		VisualConf chartConf = frameConf.visualConf();
+		VisualConf visualConf = frameConf.visualConf();
 		BiFunction<VisualDatasetConf, Integer, List<Double>> valuesExtractor = (datasetConf1, index) -> {
 			return dataset.entrySet().stream()//
 					.filter(entry -> datasetConf1.predicate().test(entry.getValue()))//
@@ -726,11 +729,11 @@ public class NeuralNet {
 		};
 		Function<VisualDatasetConf, SeriesDefinition> seriesFactory = datasetConf3 -> {
 			return new SeriesDefinition(//
-					valuesExtractor.apply(datasetConf3, chartConf.xIndex()), //
-					valuesExtractor.apply(datasetConf3, chartConf.yIndex()), //
+					valuesExtractor.apply(datasetConf3, visualConf.xIndex()), //
+					valuesExtractor.apply(datasetConf3, visualConf.yIndex()), //
 					datasetConf3.label());
 		};
-		Map<XYSeries, Color> coloredSeries = chartConf.datasetConfs().stream()//
+		Map<XYSeries, Color> coloredSeries = visualConf.datasetConfs().stream()//
 				.collect(toMap(//
 						datasetConf2 -> createSeries(seriesFactory.apply(datasetConf2)), //
 						datasetConf -> datasetConf.color()//
@@ -756,7 +759,7 @@ public class NeuralNet {
 			renderer.setSeriesPaint(seriesIndex, color);
 		});
 
-		addContour(chartConf.contourConf(), plot, createContourPainter(chartConf));
+		addContour(visualConf.contourConf(), visualConf, plot);
 
 		Consumer<List<RoundResult>> visualUpdater = _ -> {
 			chart.fireChartChanged();
@@ -765,6 +768,18 @@ public class NeuralNet {
 		ChartPanel visualPanel = new ChartPanel(chart);
 
 		return new Parts(visualPanel, visualUpdater);
+	}
+
+	private static void addContour(ContourConf contourConf, VisualConf visualConf, XYPlot plot) {
+		Function<Double, Paint> contourPainter = createContourPainter(contourConf, visualConf);
+		ContourDimension dimX = createContourDimension(plot.getDomainAxis(), contourConf.resolution().x());
+		ContourDimension dimY = createContourDimension(plot.getRangeAxis(), contourConf.resolution().y());
+		XYBlockRenderer contourRenderer = createContourRenderer(contourConf, contourPainter, dimX, dimY);
+		XYZDataset contourDataset = createContourDataset(contourConf, dimX, dimY);
+
+		int newIndex = plot.getDatasetCount();
+		plot.setDataset(newIndex, contourDataset);
+		plot.setRenderer(newIndex, contourRenderer);
 	}
 
 	private static AbstractAction createTrainAction(FrameConf frameConf, Supplier<RoundData> mlpRound,
@@ -840,29 +855,22 @@ public class NeuralNet {
 		};
 	}
 
-	private static void addContour(ContourConf contourConf, XYPlot plot, Function<Double, Paint> contourPainter) {
-		XYBlockRenderer contourRenderer = createContourRenderer(contourPainter);
-
-		XYZDataset contourDataset = createContourDataset(contourConf, plot);
-
-		int newIndex = plot.getDatasetCount();
-		plot.setDataset(newIndex, contourDataset);
-		plot.setRenderer(newIndex, contourRenderer);
-	}
-
-	private static Function<Double, Paint> createContourPainter(VisualConf chartConf) {
-		Function<Double, Paint> contourPainter = value -> {
-			Color datasetColor = chartConf.datasetConfs().stream()//
+	private static Function<Double, Paint> createContourPainter(ContourConf contourConf, VisualConf visualConf) {
+		return value -> {
+			Color datasetColor = visualConf.datasetConfs().stream()//
 					.filter(datasetConf -> datasetConf.predicate().test(value))//
 					.findAny()//
-					.map(VisualDatasetConf::color).orElse(chartConf.defaultColor());
-			return transparent(datasetColor);
+					.map(VisualDatasetConf::color).orElse(visualConf.defaultColor());
+			return contourConf.colorTransformation().apply(datasetColor, value);
 		};
-		return contourPainter;
 	}
 
-	private static XYBlockRenderer createContourRenderer(Function<Double, Paint> contourPainter) {
+	private static XYBlockRenderer createContourRenderer(ContourConf contourConf,
+			Function<Double, Paint> contourPainter, ContourDimension dimX, ContourDimension dimY) {
 		XYBlockRenderer contourRenderer = new XYBlockRenderer();
+		contourRenderer.setBlockAnchor(RectangleAnchor.CENTER);
+		contourRenderer.setBlockWidth(dimX.step());
+		contourRenderer.setBlockHeight(dimY.step());
 		contourRenderer.setPaintScale(new LookupPaintScale() {
 			@Override
 			public Paint getPaint(double value) {
@@ -898,6 +906,7 @@ public class NeuralNet {
 	record ContourConf(//
 			String name, //
 			Resolution resolution, //
+			BiFunction<Color, Double, Color> colorTransformation, //
 			BinaryOperator<Double> function //
 	) {
 	}
@@ -916,7 +925,7 @@ public class NeuralNet {
 	) {
 	}
 
-	private static double polynom(double x, Iterable<Double> factors) {
+	static double polynom(double x, Iterable<Double> factors) {
 		Iterator<Double> iterator = factors.iterator();
 
 		if (iterator.hasNext()) {
@@ -930,16 +939,11 @@ public class NeuralNet {
 		}
 	}
 
-	private static Color transparent(Color red) {
-		return new Color(red.getRed(), red.getGreen(), red.getBlue(), 1);
-	}
-
 	record Resolution(int x, int y) {
 	}
 
-	private static XYZDataset createContourDataset(ContourConf contourConf, XYPlot plot) {
-		ContourDimension dimX = createContourDimension(plot.getDomainAxis(), contourConf.resolution().x());
-		ContourDimension dimY = createContourDimension(plot.getRangeAxis(), contourConf.resolution().y());
+	private static XYZDataset createContourDataset(ContourConf contourConf, ContourDimension dimX,
+			ContourDimension dimY) {
 		return new XYZDataset() {
 			@Override
 			public int getSeriesCount() {
@@ -955,16 +959,14 @@ public class NeuralNet {
 			public double getXValue(int series, int item) {
 				int xItem = item % dimX.resolution();
 				double xUnit = (double) xItem / dimX.resolution();
-				double x = xUnit * (dimX.max() - dimX.min()) + dimX.min();
-				return x;
+				return xUnit * (dimX.max() - dimX.min()) + dimX.min();
 			}
 
 			@Override
 			public double getYValue(int series, int item) {
 				int yItem = (item / dimX.resolution()) % dimY.resolution();
 				double yUnit = (double) yItem / dimX.resolution();
-				double y = yUnit * (dimY.max() - dimY.min()) + dimY.min();
-				return y;
+				return yUnit * (dimY.max() - dimY.min()) + dimY.min();
 			}
 
 			@Override
@@ -1195,6 +1197,9 @@ public class NeuralNet {
 	}
 
 	record ContourDimension(double min, double max, int resolution) {
+		public double step() {
+			return (max() - min()) / resolution();
+		}
 	}
 
 	record RoundData(Value loss, Duration computeDuration, Duration backwardDuration, Duration updateDuration) {

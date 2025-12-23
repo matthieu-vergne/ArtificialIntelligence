@@ -5,6 +5,7 @@ import static java.util.stream.Collectors.toMap;
 import java.awt.Color;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Paint;
 import java.awt.event.ActionEvent;
@@ -25,6 +26,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
@@ -40,7 +42,6 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
-import java.util.function.UnaryOperator;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -50,12 +51,21 @@ import javax.swing.ImageIcon;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
-import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
 import javax.swing.SwingUtilities;
 
+import org.apache.batik.anim.dom.SAXSVGDocumentFactory;
+import org.apache.batik.bridge.UpdateManager;
+import org.apache.batik.bridge.UpdateManagerEvent;
+import org.apache.batik.bridge.UpdateManagerListener;
+import org.apache.batik.swing.JSVGCanvas;
+import org.apache.batik.swing.gvt.GVTTreeRendererEvent;
+import org.apache.batik.swing.gvt.GVTTreeRendererListener;
+import org.apache.batik.swing.svg.GVTTreeBuilderEvent;
+import org.apache.batik.swing.svg.GVTTreeBuilderListener;
+import org.apache.batik.util.XMLResourceDescriptor;
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartPanel;
 import org.jfree.chart.JFreeChart;
@@ -74,6 +84,11 @@ import org.jfree.data.general.DatasetGroup;
 import org.jfree.data.xy.XYSeries;
 import org.jfree.data.xy.XYSeriesCollection;
 import org.jfree.data.xy.XYZDataset;
+import org.w3c.dom.NamedNodeMap;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.w3c.dom.svg.SVGDocument;
+import org.w3c.dom.svg.SVGSVGElement;
 
 public class NeuralNet {
 
@@ -446,7 +461,8 @@ public class NeuralNet {
 		);
 
 		Resolution contourResolution = new Resolution(100, 100);
-		BiFunction<Color, Double, Color> colorTransformation = (color, value) -> adaptSaturation(color, Math.abs(value)*0.6);
+		BiFunction<Color, Double, Color> colorTransformation = (color, value) -> adaptSaturation(color,
+				Math.abs(value) * 0.6);
 		BinaryOperator<Double> contourFunction = (x, y) -> {
 			return mlp.computeRaw(List.of(x, y)).get(0);
 		};
@@ -491,50 +507,90 @@ public class NeuralNet {
 		Parts timePlotParts = createTimePlot(frameConf.timePlotConf());
 
 		JPanel mlpPanel;
-		Consumer<List<RoundResult>> graphUpdater;
+		Consumer<List<RoundResult>> mlpUpdater;
 		{
-			JLabel label = new JLabel();
-			JScrollPane pane = new JScrollPane(label);
+//			JLabel label = new JLabel();
+//			JScrollPane pane = new JScrollPane(label);
 			mlpPanel = new JPanel();
-			mlpPanel.add(pane);
-			graphUpdater = roundResults -> {
-				roundResults.forEach(roundResult -> {
-					// TODO Show MLP graphically
-					// TODO Produce Loss SVG on demand
-					// TODO Produce MLP SVG on demand
-					// TODO Paint MLP only if shown
-					if (false) {
-						String fileName = "graph";
-						Path dotPath = createTempPath(fileName, "dot");
-						createDot(roundResult.data().loss(), dotPath);
+			mlpPanel.setLayout(new GridLayout(1, 1));
+			JSVGCanvas svgCanvas = new JSVGCanvas();
+			mlpPanel.add(svgCanvas);
+//			mlpPanel.add(pane);
+			// TODO Produce Loss SVG on demand
+			// TODO Produce MLP SVG on demand
+			// TODO Paint MLP only if shown
+			{
+				String fileName = "graph";
+				Path dotPath = createTempPath(fileName, "dot");
+				createMlpDot(mlp, dotPath);
 
-						Path svgPath = createTempPath(fileName, "svg");
-						dotToFile(dotPath, svgPath, "svg");
-						System.out.println("Graph: " + svgPath);
+				Path svgPath = createTempPath(fileName, "svg");
+				dotToFile(dotPath, svgPath, "svg");
 
-						Path pngPath = createTempPath(fileName, "png");
-						BufferedImage image = dotToImage(dotPath, pngPath);
+				String saxParser = XMLResourceDescriptor.getXMLParserClassName();
+				SAXSVGDocumentFactory factory = new SAXSVGDocumentFactory(saxParser);
+				SVGDocument createdDocument;
+				try {
+					createdDocument = factory.createSVGDocument(svgPath.toString());
+				} catch (IOException cause) {
+					throw new RuntimeException(cause);
+				}
 
-						ImageIcon icon = new ImageIcon(image);
-						label.setIcon(icon);
-					}
-				});
+				svgCanvas.setDocumentState(JSVGCanvas.ALWAYS_DYNAMIC);
+				svgCanvas.setSVGDocument(createdDocument);
+			}
+			// A deep copy might be done, so retrieve actual instance after copy
+			SVGDocument svgDocument = svgCanvas.getSVGDocument();
+
+			SVGSVGElement root = svgDocument.getRootElement();
+
+			mlpUpdater = roundResults -> {
+				if (true) {
+					svgCanvas.getUpdateManager().getUpdateRunnableQueue().invokeLater(() -> {
+						streamOf(root.getElementsByTagName("g"))//
+						.filter(g -> titleOf(g).equals("I0->N0"))//
+						.forEach(g -> {
+							// TODO Retrieve weight from ID of neuron and ID of input
+							Double weight = mlp.layer(0).neuron(0).weight(0).data().get();
+							Node weightNode = findFirstChild(g, "text").orElseThrow();
+							// TODO Use app locale?
+							weightNode.setTextContent(String.format(Locale.US, "%.4f", weight));
+							System.out.println(titleOf(g) + " = " + weightOf(g));
+						});
+					});
+				} else {
+					String fileName = "graph";
+					Path dotPath = createTempPath(fileName, "dot");
+					createCalculationDot(roundResults.getLast().data().loss(), dotPath);
+
+					Path svgPath = createTempPath(fileName, "svg");
+					dotToFile(dotPath, svgPath, "svg");
+					System.out.println("Graph: " + svgPath);
+
+					Path pngPath = createTempPath(fileName, "png");
+					BufferedImage image = dotToImage(dotPath, pngPath);
+
+					ImageIcon icon = new ImageIcon(image);
+//						label.setIcon(icon);
+				}
+				;
 			};
 		}
 
-		Consumer<List<RoundResult>> roundConsumer = graphUpdater//
+		Consumer<List<RoundResult>> roundConsumer = mlpUpdater//
 				.andThen(lossPlotParts.panelUpdater())//
 				.andThen(timePlotParts.panelUpdater())//
 				.andThen(visualParts.panelUpdater());
 		JPanel trainPanel = createTrainPanel(frameConf, mlpRound, roundConsumer);
 
-		JTabbedPane screenPane = new JTabbedPane();
-		screenPane.add(visualParts.panel(), "Visual");
-		screenPane.add(lossPlotParts.panel(), "Loss plot");
-		screenPane.add(timePlotParts.panel(), "Time plot");
-		screenPane.add(mlpPanel, "MLP");
-		screenPane.add(new JPanel(), "empty");
-		// To show the headers with each card title
+		JTabbedPane tabs = new JTabbedPane();
+		tabs.add(visualParts.panel(), "Visual");
+		tabs.add(lossPlotParts.panel(), "Loss plot");
+		tabs.add(timePlotParts.panel(), "Time plot");
+		tabs.add(mlpPanel, "MLP");
+		tabs.add(new JPanel(), "empty");
+
+		tabs.setSelectedComponent(mlpPanel);// TODO Remove
 
 		JFrame frame = new JFrame("MLP");
 		frame.setLayout(new GridBagLayout());
@@ -545,7 +601,7 @@ public class NeuralNet {
 			constraints.weightx = 1.0;
 			constraints.weighty = 1.0;
 			constraints.fill = GridBagConstraints.BOTH;
-			frame.add(screenPane, constraints);
+			frame.add(tabs, constraints);
 			constraints.weightx = 1.0;
 			constraints.weighty = 0.0;
 			constraints.fill = GridBagConstraints.HORIZONTAL;
@@ -556,6 +612,98 @@ public class NeuralNet {
 		frame.pack();
 		frame.setSize(840, 930);
 		frame.setVisible(true);
+	}
+
+	private static double weightOf(Node g) {
+		return findFirstChild(g, "text").map(Node::getTextContent).map(Double::parseDouble).orElseThrow();
+	}
+
+	private static String titleOf(Node g) {
+		return findFirstChild(g, "title").map(Node::getTextContent).orElse("∅");
+	}
+
+	private static Optional<Node> findFirstChild(Node g, String tag) {
+		return streamOf(g.getChildNodes()).filter(child -> child.getNodeName().equals(tag)).findFirst();
+	}
+
+	private static Stream<Node> streamOf(NodeList nodeList) {
+		return IntStream.range(0, nodeList.getLength()).mapToObj(nodeList::item);
+	}
+
+	private static Stream<Node> streamOf(NamedNodeMap nodeMap) {
+		return IntStream.range(0, nodeMap.getLength()).mapToObj(nodeMap::item);
+	}
+
+	private static void createMlpDot(MLP mlp, Path dotPath) {
+		record Input(int i) {
+		}
+		Function<Input, String> inputIdSupplier = memoize(prefixedCounterId("I"));
+		Function<Neuron, String> neuronIdSupplier = memoize(prefixedCounterId("N"));
+		Function<Layer, String> layerIdSupplier = memoize(prefixedCounterId("L"));
+		Map<Object, String> ids = new HashMap<>();
+		File dotFile = dotPath.toFile();
+		try (PrintWriter dotWriter = new PrintWriter(dotFile)) {
+			dotWriter.println("digraph G {");
+			dotWriter.println("rankdir=LR");
+
+			// Assume MLP, so all neurons of first layer have same inputs
+			int inputsSize = mlp.layer(0).neuron(0).weights().size();
+
+			// Manage inter-layers linking, since the info is not available from the MLP
+			// TODO get input info from neuron to be agnostic of neural net architecture
+			List<Object> previousLayer = new LinkedList<>();
+			List<Object> currentLayer = new LinkedList<>();
+
+			// Insert input layers with custom logics, since no object exists for them in
+			// the MLP
+			// TODO get input info from neuron to be agnostic of neural net architecture
+			// TODO reuse non-input loop?
+			String inputLayerId = layerIdSupplier.apply(null);
+			dotWriter.println("subgraph cluster_" + inputLayerId + " {");
+			dotWriter.println("color=lightgrey;");
+			dotWriter.println("label = \"" + inputLayerId + "\";");
+			IntStream.range(0, inputsSize).mapToObj(Input::new).forEach(input -> {
+				currentLayer.add(input);
+				String inputId = inputIdSupplier.apply(input);
+				ids.put(input, inputId);
+				dotWriter.println(inputId + " [label=\"" + inputId + "\", shape=square];");
+			});
+			dotWriter.println("}");
+
+			// Insert non-input layers
+			mlp.layers().forEach(layer -> {
+				previousLayer.clear();
+				previousLayer.addAll(currentLayer);
+				currentLayer.clear();
+
+				String layerId = layerIdSupplier.apply(layer);
+				// TODO identify clusters from neurons with common inputs
+				dotWriter.println("subgraph cluster_" + layerId + " {");
+				dotWriter.println("color=lightgrey;");
+				dotWriter.println("label = \"" + layerId + "\";");
+				layer.neurons().forEach(neuron -> {
+					currentLayer.add(neuron);
+					String neuronId = neuronIdSupplier.apply(neuron);
+					ids.put(neuron, neuronId);
+					dotWriter.println(neuronId + " [label=\"" + neuronId + "\", shape=circle];");
+					previousLayer.forEach(input -> {
+						double weight = neuron.weights().get(previousLayer.indexOf(input)).data().get();
+						dotWriter.println(
+								ids.get(input) + " -> " + neuronId + " [label=\"" + roundForDot(weight) + "\"];");
+					});
+				});
+				dotWriter.println("}");
+			});
+
+			dotWriter.println("}");
+		} catch (FileNotFoundException cause) {
+			throw new RuntimeException(cause);
+		}
+	}
+
+	private static <T> Function<T, String> prefixedCounterId(String prefix) {
+		AtomicInteger counter = new AtomicInteger();
+		return _ -> prefix + counter.getAndIncrement();
 	}
 
 	private static JPanel createTrainPanel(FrameConf frameConf, Supplier<RoundData> mlpRound,
@@ -1079,7 +1227,7 @@ public class NeuralNet {
 		}
 	}
 
-	private static void createDot(Value value, Path dotPath) {
+	private static void createCalculationDot(Value value, Path dotPath) {
 		File dotFile = dotPath.toFile();
 		AtomicInteger counter = new AtomicInteger();
 		Function<Value, String> valueIdSupplier = memoize((_) -> "N" + counter.getAndIncrement());
@@ -1125,7 +1273,7 @@ public class NeuralNet {
 		return Optional.ofNullable(data.get()).map(NeuralNet::roundForDot).map(Object::toString).orElse("∅");
 	}
 
-	private static double roundForDot(Double value) {
+	private static double roundForDot(double value) {
 		return (double) Math.round(value * 10000) / 10000;
 	}
 

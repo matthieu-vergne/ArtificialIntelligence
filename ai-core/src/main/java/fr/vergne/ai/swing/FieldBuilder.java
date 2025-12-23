@@ -1,4 +1,4 @@
-package fr.vergne.ai.neuralnet;
+package fr.vergne.ai.swing;
 
 import java.awt.Color;
 import java.util.function.BiConsumer;

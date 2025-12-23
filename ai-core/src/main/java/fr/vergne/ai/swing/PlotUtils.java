@@ -1,9 +1,9 @@
-package fr.vergne.ai.neuralnet;
+package fr.vergne.ai.swing;
 
 import java.util.Arrays;
 import java.util.function.BiConsumer;
 
-interface PlotUtils {
+public interface PlotUtils {
 
 	interface WindowFactory {
 		PlotUtils.Window<Long, Long> createLongLongWindow(BiConsumer<Long, Long> consumer);

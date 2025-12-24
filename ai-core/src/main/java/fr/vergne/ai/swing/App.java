@@ -4,9 +4,9 @@ import static fr.vergne.ai.utils.LambdaUtils.memoize;
 import static java.util.stream.Collectors.toMap;
 
 import java.awt.Color;
+import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
-import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Paint;
 import java.awt.event.ActionEvent;
@@ -42,13 +42,17 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import javax.swing.AbstractAction;
+import javax.swing.JButton;
+import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
 import javax.swing.SwingUtilities;
+import javax.swing.filechooser.FileNameExtensionFilter;
 
 import org.apache.batik.anim.dom.SAXSVGDocumentFactory;
 import org.apache.batik.swing.JSVGCanvas;
@@ -87,20 +91,15 @@ import fr.vergne.ai.utils.LambdaUtils;
 
 @SuppressWarnings("serial")
 public class App extends JFrame {
-	public App(FrameConf frameConf, Map<List<Double>, Double> dataset, MLP mlp, Supplier<RoundData> mlpRound) {
-		// TODO Create dataset panel
-		Parts mlpParts = createMlpPanel(mlp);
-		Parts visualParts = createVisual(frameConf.visualConf(), dataset);
-		Parts lossPlotParts = createLossPlot(frameConf.lossPlotConf());
-		Parts timePlotParts = createTimePlot(frameConf.timePlotConf());
-		// TODO Create conf panel
+	public App(Conf conf, Map<List<Double>, Double> dataset, MLP mlp, Supplier<RoundData> mlpRound) {
+		this.setTitle("MLP");
 
-		Consumer<List<RoundResult>> roundConsumer = mlpParts.panelUpdater()//
-				.andThen(visualParts.panelUpdater())//
-				.andThen(lossPlotParts.panelUpdater())//
-				.andThen(timePlotParts.panelUpdater())//
-		;
-		JPanel trainPanel = createTrainPanel(frameConf, mlpRound, roundConsumer);
+		// TODO Create conf panel
+		// TODO Create dataset panel
+		Parts mlpParts = createMlpPanel(conf.neuralNetConf(), mlp);
+		Parts visualParts = createVisual(conf.visualConf(), dataset);
+		Parts lossPlotParts = createLossPlot(conf.lossPlotConf());
+		Parts timePlotParts = createTimePlot(conf.timePlotConf());
 
 		JTabbedPane tabs = new JTabbedPane();
 		tabs.add(mlpParts.panel(), "MLP");
@@ -108,25 +107,30 @@ public class App extends JFrame {
 		tabs.add(lossPlotParts.panel(), "Loss plot");
 		tabs.add(timePlotParts.panel(), "Time plot");
 
-		this.setTitle("MLP");
+		Consumer<List<RoundResult>> roundConsumer = mlpParts.panelUpdater()//
+				.andThen(visualParts.panelUpdater())//
+				.andThen(lossPlotParts.panelUpdater())//
+				.andThen(timePlotParts.panelUpdater())//
+		;
+
+		JPanel trainPanel = createTrainPanel(conf.trainConf(), mlpRound, roundConsumer);
+
 		this.setLayout(new GridBagLayout());
-		{
-			GridBagConstraints constraints = new GridBagConstraints();
-			constraints.gridx = 0;
-			constraints.gridy = GridBagConstraints.RELATIVE;
-			constraints.weightx = 1.0;
-			constraints.weighty = 1.0;
-			constraints.fill = GridBagConstraints.BOTH;
-			this.add(tabs, constraints);
-			constraints.weightx = 1.0;
-			constraints.weighty = 0.0;
-			constraints.fill = GridBagConstraints.HORIZONTAL;
-			this.add(trainPanel, constraints);
-		}
+		GridBagConstraints constraints = new GridBagConstraints();
+		constraints.gridx = 0;
+		constraints.gridy = GridBagConstraints.RELATIVE;
+		constraints.weightx = 1.0;
+		constraints.weighty = 1.0;
+		constraints.fill = GridBagConstraints.BOTH;
+		this.add(tabs, constraints);
+		constraints.weightx = 1.0;
+		constraints.weighty = 0.0;
+		constraints.fill = GridBagConstraints.HORIZONTAL;
+		this.add(trainPanel, constraints);
 	}
 
-	private Parts createMlpPanel(MLP mlp) {
-		// TODO Factor DOT producer + NeuralNetBrowser + SVG updater
+	private Parts createMlpPanel(NeuralNetConf neuralNetConf, MLP mlp) {
+		// TODO Factor DOT producer + NeuralNetBrowser + SVG updater (node IDs, etc.)
 		// TODO Support NeuralNet building
 		Function<Input, String> inputIdSupplier = memoize(prefixedCounterId("I"));
 		Function<Neuron, String> neuronIdSupplier = memoize(prefixedCounterId("N"));
@@ -134,7 +138,7 @@ public class App extends JFrame {
 
 		String fileName = "graph";
 		Path dotPath = createTempPath(fileName, "dot");
-		createMlpDot(mlp, dotPath, inputIdSupplier, neuronIdSupplier, layerIdSupplier);
+		createMlpDot(neuralNetConf, mlp, dotPath, inputIdSupplier, neuronIdSupplier, layerIdSupplier);
 
 		Path svgPath = createTempPath(fileName, "svg");
 		dotToFile(dotPath, svgPath, "svg");
@@ -151,53 +155,132 @@ public class App extends JFrame {
 		JSVGCanvas svgCanvas = new JSVGCanvas();
 		svgCanvas.setDocumentState(JSVGCanvas.ALWAYS_DYNAMIC);
 		svgCanvas.setSVGDocument(createdDocument);
-		// A deep copy might be done, so retrieve actual instance after copy
+		// A deep copy might be done, so retrieve actually stored instance
 		SVGDocument svgDocument = svgCanvas.getSVGDocument();
-
+		// We will work on it from its root
 		SVGSVGElement root = svgDocument.getRootElement();
 
 		Consumer<List<RoundResult>> mlpUpdater = _ -> {
+			/*
+			 * As per Batik documentation, for a dynamic SVG to properly trigger its
+			 * repainting, the changes must be performed in the updater manager queue.
+			 */
 			svgCanvas.getUpdateManager().getUpdateRunnableQueue().invokeLater(() -> {
+				int decimals = neuralNetConf.displayedDecimals();
+				Function<Double, String> parameterFormatter = value -> {
+					// TODO Use app locale?
+					return String.format(Locale.US, "%." + decimals + "f", value);
+				};
 				NeuralNetBrowser mlpBrowser = NeuralNetBrowser.forMlp(mlp);
-				streamOf(root.getElementsByTagName("g"))//
-						.filter(g -> titleOf(g).matches("[IN][0-9]+->N[0-9]+"))//
-						.forEach(g -> {
-							String title = titleOf(g);
-							int separatorStart = title.indexOf("->");
-							int separatorEnd = separatorStart + 2;
-							String inId = title.substring(0, separatorStart);
-							String outId = title.substring(separatorEnd);
-							double weight = mlpBrowser.neuron(outId).weightWith(inId);
-							Node weightNode = findFirstChild(g, "text").orElseThrow();
-							// TODO Use app locale?
-							weightNode.setTextContent(String.format(Locale.US, "%.4f", weight));
-						});
-				streamOf(root.getElementsByTagName("g"))//
-						.filter(g -> titleOf(g).matches("N[0-9]+"))//
-						.forEach(g -> {
-							String neuronId = titleOf(g);
-							double bias = mlpBrowser.neuron(neuronId).bias();
-							Node biasNode = findSecondChild(g, "text").orElseThrow();
-							// TODO Use app locale?
-							biasNode.setTextContent(String.format(Locale.US, "%.4f", bias));
-						});
+				streamOf(root.getElementsByTagName("g")).forEach(groupNode -> {
+					String title = titleOf(groupNode);
+					if (title.matches("[IN][0-9]+->N[0-9]+")) {
+						int separatorStart = title.indexOf("->");
+						int separatorEnd = separatorStart + 2;
+						String inputId = title.substring(0, separatorStart);
+						String outputId = title.substring(separatorEnd);
+						double weight = mlpBrowser.neuron(outputId).weightWith(inputId);
+						Node weightNode = findFirstChild(groupNode, "text").orElseThrow();
+						weightNode.setTextContent(parameterFormatter.apply(weight));
+					} else if (title.matches("N[0-9]+")) {
+						String neuronId = title;
+						double bias = mlpBrowser.neuron(neuronId).bias();
+						// First text is node name, bias is next one
+						Node biasNode = findSecondChild(groupNode, "text").orElseThrow();
+						biasNode.setTextContent(parameterFormatter.apply(bias));
+					} else {
+						// Ignore
+					}
+				});
 			});
 			;
 		};
 
-		// TODO Support export DOT
-		// TODO Support export SVG
-		// TODO Support export PNG
-		// TODO Support export PDF
-		JPanel exportPanel = new JPanel();
-		exportPanel.setLayout(new GridLayout(1, 3));
-		// Add field to select among DOT/SVG/PNG/PDF
+		JPanel exportPanel = createExportPanel(neuralNetConf, mlp, inputIdSupplier, neuronIdSupplier, layerIdSupplier);
 
 		JPanel mlpPanel = new JPanel();
-		mlpPanel.setLayout(new GridLayout(1, 1));
-		mlpPanel.add(svgCanvas);
+		mlpPanel.setLayout(new GridBagLayout());
+		GridBagConstraints constraints = new GridBagConstraints();
+		constraints.gridx = 1;
+		constraints.gridy = GridBagConstraints.RELATIVE;
+		constraints.weightx = 1.0;
+		constraints.weighty = 1.0;
+		constraints.fill = GridBagConstraints.BOTH;
+		mlpPanel.add(svgCanvas, constraints);
+		constraints.weighty = 0.0;
+		mlpPanel.add(exportPanel, constraints);
 
 		return new Parts(mlpPanel, mlpUpdater);
+	}
+
+	private JPanel createExportPanel(NeuralNetConf neuralNetConf, MLP mlp, Function<Input, String> inputIdSupplier,
+			Function<Neuron, String> neuronIdSupplier, Function<Layer, String> layerIdSupplier) {
+		JPanel exportPanel = new JPanel();
+		exportPanel.setLayout(new FlowLayout(FlowLayout.CENTER));
+		exportPanel.add(new JButton(new AbstractAction("Export") {
+
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				JFileChooser fileChooser = new JFileChooser();
+				fileChooser.setDialogTitle("Export Data");
+				fileChooser.setCurrentDirectory(new File("."));
+				fileChooser.addChoosableFileFilter(new FileNameExtensionFilter("DOT", "dot"));
+				fileChooser.addChoosableFileFilter(new FileNameExtensionFilter("SVG", "svg"));
+				fileChooser.addChoosableFileFilter(new FileNameExtensionFilter("PNG", "png"));
+				fileChooser.addChoosableFileFilter(new FileNameExtensionFilter("PDF", "pdf"));
+				fileChooser.addPropertyChangeListener("fileFilterChanged", evt -> {
+					Path directory = fileChooser.getCurrentDirectory().toPath();
+					FileNameExtensionFilter newFilter = (FileNameExtensionFilter) evt.getNewValue();
+					String newExt = newFilter.getExtensions()[0];
+					String newFileName = "neuralnet." + newExt;
+					Path newPath = directory.resolve(newFileName);
+					fileChooser.setSelectedFile(newPath.toFile());
+				});
+				// Remove default file filter because we focus on supported formats
+				// Having it after setting the listener triggers it to auto-name the file
+				fileChooser.removeChoosableFileFilter(fileChooser.getAcceptAllFileFilter());
+
+				int result = fileChooser.showSaveDialog(exportPanel);
+				if (result == JFileChooser.APPROVE_OPTION) {
+					File file = fileChooser.getSelectedFile();
+					String fileName = file.getName();
+					if (fileName.endsWith(".dot")) {
+						if (existsAndOverrideRejected(file)) {
+							return; // User chose not to overwrite, do nothing
+						}
+						createMlpDot(neuralNetConf, mlp, file.toPath(), inputIdSupplier, neuronIdSupplier,
+								layerIdSupplier);
+					} else if (fileName.endsWith(".svg") || fileName.endsWith(".pdf") || fileName.endsWith(".png")) {
+						if (existsAndOverrideRejected(file)) {
+							return; // User chose not to overwrite, do nothing
+						}
+						Path tempDotPath = createTempPath(fileName, "dot");
+						createMlpDot(neuralNetConf, mlp, tempDotPath, inputIdSupplier, neuronIdSupplier,
+								layerIdSupplier);
+						String ext = fileName.substring(fileName.length() - 3);
+						dotToFile(tempDotPath, file.toPath(), ext);
+					} else {
+						throw new IllegalArgumentException("Unsupported format: " + fileName);
+					}
+				}
+			}
+
+			private boolean existsAndOverrideRejected(File file) {
+				if (!file.exists()) {
+					return false;
+				}
+
+				int overrideConfirmation = JOptionPane.showConfirmDialog(exportPanel,
+						"The file already exists. Do you want to overwrite it?", "Overwrite File",
+						JOptionPane.YES_NO_OPTION);
+				if (overrideConfirmation == JOptionPane.YES_OPTION) {
+					return false;
+				}
+
+				return true;
+			}
+		}));
+		return exportPanel;
 	}
 
 	private static Parts createVisual(VisualConf visualConf, Map<List<Double>, Double> dataset) {
@@ -342,22 +425,22 @@ public class App extends JFrame {
 		return new Parts(chartPanel, lossPlotUpdater);
 	}
 
-	private static JPanel createTrainPanel(FrameConf frameConf, Supplier<RoundData> mlpRound,
+	private static JPanel createTrainPanel(TrainConf trainConf, Supplier<RoundData> mlpRound,
 			Consumer<List<RoundResult>> roundConsumer) {
-		JTextField roundsLimitField = FieldBuilder.buildFieldFor(frameConf.trainConf().roundsLimit())//
+		JTextField roundsLimitField = FieldBuilder.buildFieldFor(trainConf.roundsLimit())//
 				.intoText(src -> src.get().map(Object::toString).orElse(""))//
 				.as(Long::parseLong).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
 				.whenEmptyApply(src -> src.set(Optional.empty()))//
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
-		JTextField batchSizeField = FieldBuilder.buildFieldFor(frameConf.trainConf().batchSize())//
+		JTextField batchSizeField = FieldBuilder.buildFieldFor(trainConf.batchSize())//
 				.intoText(src -> Long.toString(src.get()))//
 				.as(Long::parseLong).ifIs(value -> value > 0).thenApply(AtomicLong::set)//
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
-		JTextField updateStepField = FieldBuilder.buildFieldFor(frameConf.trainConf().updateStep())//
+		JTextField updateStepField = FieldBuilder.buildFieldFor(trainConf.updateStep())//
 				.intoText(src -> Double.toString(src.get()))//
 				.as(Double::parseDouble).ifIs(value -> value > 0).thenApply(AtomicReference::set)//
 				.otherwiseShow(FieldBuilder::error)//
@@ -372,9 +455,8 @@ public class App extends JFrame {
 			});
 		};
 
-		JToggleButton trainButton = new JToggleButton();
+		JToggleButton trainButton = new JToggleButton(createTrainAction(trainConf, mlpRound, roundConsumer));
 		roundConsumer = lossFieldUpdater.andThen(roundConsumer);
-		trainButton.setAction(createTrainAction(frameConf, mlpRound, roundConsumer, trainButton));
 
 		JPanel trainPanel = new JPanel();
 		trainPanel.setLayout(new GridBagLayout());
@@ -411,8 +493,9 @@ public class App extends JFrame {
 		return trainPanel;
 	}
 
-	private static void createMlpDot(MLP mlp, Path dotPath, Function<Input, String> inputIdSupplier,
-			Function<Neuron, String> neuronIdSupplier, Function<Layer, String> layerIdSupplier) {
+	private static void createMlpDot(NeuralNetConf neuralNetConf, MLP mlp, Path dotPath,
+			Function<Input, String> inputIdSupplier, Function<Neuron, String> neuronIdSupplier,
+			Function<Layer, String> layerIdSupplier) {
 		Map<Object, String> ids = new HashMap<>();
 		File dotFile = dotPath.toFile();
 		try (PrintWriter dotWriter = new PrintWriter(dotFile)) {
@@ -433,7 +516,7 @@ public class App extends JFrame {
 			// TODO reuse non-input loop?
 			String inputLayerId = layerIdSupplier.apply(null);
 			dotWriter.println("subgraph cluster_" + inputLayerId + " {");
-			dotWriter.println("color=lightgrey;");
+			dotWriter.println("color=" + dotColorCoder(neuralNetConf.clusterColor()) + ";");
 			dotWriter.println("label = \"" + inputLayerId + "\";");
 			IntStream.range(0, inputsSize).mapToObj(Input::new).forEach(input -> {
 				currentLayer.add(input);
@@ -452,7 +535,7 @@ public class App extends JFrame {
 				String layerId = layerIdSupplier.apply(layer);
 				// TODO identify clusters from neurons with common inputs
 				dotWriter.println("subgraph cluster_" + layerId + " {");
-				dotWriter.println("color=lightgrey;");
+				dotWriter.println("color=" + dotColorCoder(neuralNetConf.clusterColor()) + ";");
 				dotWriter.println("label = \"" + layerId + "\";");
 				layer.neurons().forEach(neuron -> {
 					currentLayer.add(neuron);
@@ -474,6 +557,14 @@ public class App extends JFrame {
 		} catch (FileNotFoundException cause) {
 			throw new RuntimeException(cause);
 		}
+	}
+
+	private static String dotColorCoder(Color color) {
+		return "\"#" //
+				+ String.format("%2x", color.getRed()) //
+				+ String.format("%2x", color.getGreen())//
+				+ String.format("%2x", color.getBlue()) //
+				+ "\"";
 	}
 
 	private static void dotToFile(Path dotPath, Path pngPath, String type) {
@@ -674,18 +765,19 @@ public class App extends JFrame {
 		};
 	}
 
-	private static AbstractAction createTrainAction(FrameConf frameConf, Supplier<RoundData> mlpRound,
-			Consumer<List<RoundResult>> roundConsumer, JToggleButton runButton) {
+	private static AbstractAction createTrainAction(TrainConf trainConf, Supplier<RoundData> mlpRound,
+			Consumer<List<RoundResult>> roundConsumer) {
 		return new AbstractAction("Train") {
 			long round = 0;
 
 			@Override
 			public void actionPerformed(ActionEvent e) {
-				if (!runButton.isSelected()) {
+				JToggleButton trainButton = (JToggleButton) e.getSource();
+				if (!trainButton.isSelected()) {
 					// Wait for the stuff to stop
 				} else {
-					AtomicReference<Optional<Long>> roundsLimit = frameConf.trainConf().roundsLimit();
-					AtomicLong batchSize = frameConf.trainConf().batchSize();
+					AtomicReference<Optional<Long>> roundsLimit = trainConf.roundsLimit();
+					AtomicLong batchSize = trainConf.batchSize();
 					SwingUtilities.invokeLater(new Runnable() {
 						@Override
 						public void run() {
@@ -708,11 +800,11 @@ public class App extends JFrame {
 						}
 
 						private void stopTraining() {
-							runButton.setSelected(false);
+							trainButton.setSelected(false);
 						}
 
 						private boolean isTrainingStopped() {
-							return !runButton.isSelected();
+							return !trainButton.isSelected();
 						}
 
 						private int batchedRound = 0;
@@ -845,8 +937,13 @@ public class App extends JFrame {
 	}
 
 	// TODO Make private
-	public record FrameConf(//
+	public record NeuralNetConf(int displayedDecimals, Color clusterColor) {
+	}
+
+	// TODO Make private
+	public record Conf(//
 			TrainConf trainConf, //
+			NeuralNetConf neuralNetConf, //
 			VisualConf visualConf, //
 			LossPlotConf lossPlotConf, //
 			TimePlotConf timePlotConf//

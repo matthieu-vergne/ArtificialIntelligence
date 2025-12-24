@@ -28,9 +28,10 @@ import javax.swing.JFrame;
 import org.jfree.chart.ui.RectangleEdge;
 
 import fr.vergne.ai.swing.App;
+import fr.vergne.ai.swing.App.Conf;
 import fr.vergne.ai.swing.App.ContourConf;
-import fr.vergne.ai.swing.App.FrameConf;
 import fr.vergne.ai.swing.App.LossPlotConf;
+import fr.vergne.ai.swing.App.NeuralNetConf;
 import fr.vergne.ai.swing.App.Resolution;
 import fr.vergne.ai.swing.App.RoundData;
 import fr.vergne.ai.swing.App.TimePlotConf;
@@ -436,9 +437,13 @@ public class NeuralNet {
 
 		LossPlotConf lossPlotConf = new LossPlotConf(windowFactory);
 
-		FrameConf frameConf = new FrameConf(trainConf, visualConf, lossPlotConf, timePlotConf);
+		int displayedDecimals = 4;
+		Color clusterColor = Color.LIGHT_GRAY;
+		NeuralNetConf neuralNetConf = new NeuralNetConf(displayedDecimals, clusterColor);
 
-		App app = new App(frameConf, dataset, mlp, mlpRound);
+		Conf conf = new Conf(trainConf, neuralNetConf, visualConf, lossPlotConf, timePlotConf);
+
+		App app = new App(conf, dataset, mlp, mlpRound);
 		app.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		app.pack();
 		app.setSize(840, 930);

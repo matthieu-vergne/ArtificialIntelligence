@@ -47,6 +47,7 @@ import java.util.stream.Stream;
 import javax.swing.AbstractAction;
 import javax.swing.ButtonGroup;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -115,8 +116,8 @@ public class App extends JFrame {
 			Resolution contourResolution = new Resolution(100, 100);
 			BiFunction<Color, Double, Color> colorTransformation = (color, value) -> adaptSaturation(color,
 					Math.abs(value) * 0.6);
-			Function<MLP, BinaryOperator<Double>> contourFunctionFactory = mlp2 -> (x, y) -> {
-				return mlp2.computeRaw(List.of(x, y)).get(0);
+			Function<MLP, BinaryOperator<Double>> contourFunctionFactory = mlp -> (x, y) -> {
+				return mlp.computeRaw(List.of(x, y)).get(0);
 			};
 			ContourState contourState = new ContourState("MLP", contourResolution, colorTransformation,
 					contourFunctionFactory);
@@ -148,7 +149,7 @@ public class App extends JFrame {
 
 		Parts datasetParts = createDatasetPanel(state.datasetState());
 		Parts mlpParts = createMlpPanel(state.neuralNetState());
-		Parts visualParts = createVisual(state.visualState(), datasetParts.datasetNotifier(), mlpParts.mlpSupplier());
+		Parts visualParts = createVisual(state.visualState(), datasetParts.datasetNotifier(), mlpParts.mlpNotifier());
 		Parts lossPlotParts = createLossPlot(state.lossPlotState());
 		Parts timePlotParts = createTimePlot(state.timePlotState());
 
@@ -167,7 +168,7 @@ public class App extends JFrame {
 		;
 
 		JPanel trainPanel = createTrainPanel(state.trainState(), roundConsumer, datasetParts.datasetNotifier(),
-				mlpParts.mlpSupplier());
+				mlpParts.mlpNotifier());
 
 		this.setLayout(new GridBagLayout());
 		GridBagConstraints constraints = new GridBagConstraints();
@@ -186,19 +187,16 @@ public class App extends JFrame {
 	}
 
 	private Parts createDatasetPanel(DatasetState datasetState) {
-		record Entry(String label, Supplier<Map<List<Double>, Double>> datasetNotifier) {
+		record Entry(String label, Supplier<Map<List<Double>, Double>> datasetSupplier) {
 		}
 		List<Entry> datasetCandidates = List.of(//
 				new Entry("Circle", () -> Dataset.circle(datasetState.random())), //
 				new Entry("Columns 1", () -> Dataset.columns1(datasetState.random())), //
 				new Entry("Columns 2", () -> Dataset.columns2(datasetState.random())), //
 				new Entry("Columns steep", () -> Dataset.steepColumns(datasetState.random())), //
-				new Entry("Moons", () -> Dataset.moons(datasetState.random())), //
-				new Entry("Import", () -> {
-					// TODO Implement dataset import
-					throw new RuntimeException("Not implemented yet");
-				})//
+				new Entry("Moons", () -> Dataset.moons(datasetState.random()))//
 		);
+		// TODO Implement dataset import (add to candidates + autoload)
 
 		JPanel panel = new JPanel(new GridBagLayout());
 		GridBagConstraints constraints = new GridBagConstraints();
@@ -211,7 +209,7 @@ public class App extends JFrame {
 		DataNotifier<Map<List<Double>, Double>> datasetNotifier = new DataNotifier<>();
 		datasetCandidates.forEach(entry -> {
 			var label = entry.label();
-			var datasetSupplier = entry.datasetNotifier();
+			var datasetSupplier = entry.datasetSupplier();
 
 			JRadioButton radioButton = new JRadioButton(label);
 			radioButton.addActionListener(_ -> {
@@ -231,47 +229,66 @@ public class App extends JFrame {
 	}
 
 	private Parts createMlpPanel(NeuralNetState neuralNetState) {
-		// TODO Notify other components of neural net update
-		// TODO Redraw neural net stuff on relevant components upon update
-		// TODO Support NeuralNet building
-		MLP mlp = switch (1) {
-		case 1 ->
-			new MLP(ParameterNamer.create(), 2, List.of(4, 1), (_) -> neuralNetState.random().nextDouble(-1.0, 1.0));
-		case 2 ->
-			new MLP(ParameterNamer.create(), 2, List.of(20, 1), (_) -> neuralNetState.random().nextDouble(-1.0, 1.0));
-		case 3 -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1),
-				(_) -> neuralNetState.random().nextDouble(-1.0, 1.0));
-		default -> throw new IllegalArgumentException("Unexpected MLP");
-		};
-
-		NeuralNetBrowser neuralNetBrowser = NeuralNetBrowser.forMlp(mlp, prefixedCounterId("I"), prefixedCounterId("N"),
-				prefixedCounterId("L"));
-
-		String fileName = "graph";
-		Path dotPath = createTempPath(fileName, "dot");
-		createMlpDot(neuralNetState, neuralNetBrowser, dotPath);
-
-		Path svgPath = createTempPath(fileName, "svg");
-		dotToFile(dotPath, svgPath, "svg");
-
-		String saxParser = XMLResourceDescriptor.getXMLParserClassName();
-		SAXSVGDocumentFactory factory = new SAXSVGDocumentFactory(saxParser);
-		SVGDocument createdDocument;
-		try {
-			createdDocument = factory.createSVGDocument(svgPath.toString());
-		} catch (IOException cause) {
-			throw new RuntimeException(cause);
+		record Entry(String label, Supplier<MLP> mlpSupplier) {
+			@Override
+			public final String toString() {
+				return label;
+			}
 		}
+		List<Entry> mlpCandidates = List.of(//
+				new Entry("4x1",
+						() -> new MLP(ParameterNamer.create(), 2, List.of(4, 1),
+								(_) -> neuralNetState.random().nextDouble(-1.0, 1.0))), //
+				new Entry("20x1",
+						() -> new MLP(ParameterNamer.create(), 2, List.of(20, 1),
+								(_) -> neuralNetState.random().nextDouble(-1.0, 1.0))), //
+				new Entry("4x4x4x4x1", () -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1),
+						(_) -> neuralNetState.random().nextDouble(-1.0, 1.0)))//
+		);
+		// TODO Implement MLP import (add to candidates + autoload)
+		// TODO Implement MLP building
 
+		var ctx = new Object() {
+			NeuralNetBrowser neuralNetBrowser;
+		};
+		DataNotifier<MLP> mlpNotifier = new DataNotifier<MLP>();
+		JComboBox<Entry> factoryComboBox = new JComboBox<>(mlpCandidates.toArray(new Entry[0]));
 		JSVGCanvas svgCanvas = new JSVGCanvas();
-		svgCanvas.setDocumentState(JSVGCanvas.ALWAYS_DYNAMIC);
-		svgCanvas.setSVGDocument(createdDocument);
-		// A deep copy might be done, so retrieve actually stored instance
-		SVGDocument svgDocument = svgCanvas.getSVGDocument();
-		// We will work on it from its root
-		SVGSVGElement root = svgDocument.getRootElement();
+		factoryComboBox.addActionListener(_ -> {
+			Entry selectedOption = (Entry) factoryComboBox.getSelectedItem();
+			MLP mlp = selectedOption.mlpSupplier().get();
+			mlpNotifier.update(mlp);
+
+			NeuralNetBrowser neuralNetBrowser = NeuralNetBrowser.forMlp(mlp, prefixedCounterId("I"),
+					prefixedCounterId("N"), prefixedCounterId("L"));
+
+			String fileName = "graph";
+			Path dotPath = createTempPath(fileName, "dot");
+			createMlpDot(neuralNetState, () -> neuralNetBrowser, dotPath);
+
+			Path svgPath = createTempPath(fileName, "svg");
+			dotToFile(dotPath, svgPath, "svg");
+
+			String saxParser = XMLResourceDescriptor.getXMLParserClassName();
+			SAXSVGDocumentFactory factory = new SAXSVGDocumentFactory(saxParser);
+			SVGDocument createdDocument;
+			try {
+				createdDocument = factory.createSVGDocument(svgPath.toString());
+			} catch (IOException cause) {
+				throw new RuntimeException(cause);
+			}
+
+			svgCanvas.setDocumentState(JSVGCanvas.ALWAYS_DYNAMIC);
+			svgCanvas.setSVGDocument(createdDocument);
+			ctx.neuralNetBrowser = neuralNetBrowser;
+			mlpNotifier.update(mlp);
+		});
 
 		Consumer<List<RoundResult>> mlpUpdater = _ -> {
+			// A deep copy might be done, so retrieve actually stored instance
+			SVGDocument svgDocument = svgCanvas.getSVGDocument();
+			// We will work on it from its root
+			SVGSVGElement root = svgDocument.getRootElement();
 			/*
 			 * As per Batik documentation, for a dynamic SVG to properly trigger its
 			 * repainting, the changes must be performed in the updater manager queue.
@@ -282,6 +299,7 @@ public class App extends JFrame {
 					// TODO Use app locale?
 					return String.format(Locale.US, "%." + decimals + "f", value);
 				};
+				NeuralNetBrowser neuralNetBrowser = ctx.neuralNetBrowser;
 				streamOf(root.getElementsByTagName("g")).forEach(groupNode -> {
 					String title = titleOf(groupNode);
 					if (title.matches("[IN][0-9]+->N[0-9]+")) {
@@ -306,7 +324,8 @@ public class App extends JFrame {
 			;
 		};
 
-		JPanel exportPanel = createExportPanel(neuralNetState, neuralNetBrowser);
+		Supplier<NeuralNetBrowser> neuralNetBrowserSupplier = () -> ctx.neuralNetBrowser;
+		JPanel exportPanel = createExportPanel(neuralNetState, neuralNetBrowserSupplier);
 
 		JPanel mlpPanel = new JPanel();
 		mlpPanel.setLayout(new GridBagLayout());
@@ -314,16 +333,19 @@ public class App extends JFrame {
 		constraints.gridx = 1;
 		constraints.gridy = GridBagConstraints.RELATIVE;
 		constraints.weightx = 1.0;
-		constraints.weighty = 1.0;
 		constraints.fill = GridBagConstraints.BOTH;
+		constraints.weighty = 0.0;
+		mlpPanel.add(factoryComboBox, constraints);
+		constraints.weighty = 1.0;
 		mlpPanel.add(svgCanvas, constraints);
 		constraints.weighty = 0.0;
 		mlpPanel.add(exportPanel, constraints);
 
-		return new Parts(mlpPanel, mlpUpdater, () -> mlp, null);
+		return new Parts(mlpPanel, mlpUpdater, mlpNotifier, null);
 	}
 
-	private JPanel createExportPanel(NeuralNetState neuralNetState, NeuralNetBrowser neuralNetBrowser) {
+	private JPanel createExportPanel(NeuralNetState neuralNetState,
+			Supplier<NeuralNetBrowser> neuralNetBrowserSupplier) {
 		JPanel exportPanel = new JPanel();
 		exportPanel.setLayout(new FlowLayout(FlowLayout.CENTER));
 		exportPanel.add(new JButton(new AbstractAction("Export") {
@@ -357,13 +379,13 @@ public class App extends JFrame {
 						if (existsAndOverrideRejected(file)) {
 							return; // User chose not to overwrite, do nothing
 						}
-						createMlpDot(neuralNetState, neuralNetBrowser, file.toPath());
+						createMlpDot(neuralNetState, neuralNetBrowserSupplier, file.toPath());
 					} else if (fileName.endsWith(".svg") || fileName.endsWith(".pdf") || fileName.endsWith(".png")) {
 						if (existsAndOverrideRejected(file)) {
 							return; // User chose not to overwrite, do nothing
 						}
 						Path tempDotPath = createTempPath(fileName, "dot");
-						createMlpDot(neuralNetState, neuralNetBrowser, tempDotPath);
+						createMlpDot(neuralNetState, neuralNetBrowserSupplier, tempDotPath);
 						String ext = fileName.substring(fileName.length() - 3);
 						dotToFile(tempDotPath, file.toPath(), ext);
 					} else {
@@ -391,62 +413,74 @@ public class App extends JFrame {
 	}
 
 	private static Parts createVisual(VisualState visualState, DataNotifier<Map<List<Double>, Double>> datasetNotifier,
-			Supplier<MLP> mlpSupplier) {
+			DataNotifier<MLP> mlpNotifier) {
 		JPanel visualPanel = new JPanel(new GridLayout(1, 1));
 
-		// TODO Redraw dataset points on Visual upon update
-		DataNotifier.Listener<Map<List<Double>, Double>> datasetListener = new DataNotifier.Listener<>() {
-
-			@Override
-			public void updated(Map<List<Double>, Double> dataset) {
-				BiFunction<VisualDatasetState, Integer, List<Double>> valuesExtractor = (datasetState, index) -> {
-					return dataset.entrySet().stream()//
-							.filter(entry -> datasetState.predicate().test(entry.getValue()))//
-							.map(Entry::getKey)//
-							.map(list -> list.get(index))//
-							.toList();
-				};
-				Function<VisualDatasetState, SeriesDefinition> seriesFactory = datasetState -> {
-					return new SeriesDefinition(//
-							valuesExtractor.apply(datasetState, visualState.xIndex()), //
-							valuesExtractor.apply(datasetState, visualState.yIndex()), //
-							datasetState.label());
-				};
-				Map<XYSeries, Color> coloredSeries = visualState.datasetStates().stream()//
-						.collect(toMap(//
-								datasetState -> createSeries(seriesFactory.apply(datasetState)), //
-								datasetState -> datasetState.color()//
-				));
-				XYSeriesCollection chartDataset = new XYSeriesCollection();
-				coloredSeries.keySet().forEach(chartDataset::addSeries);
-
-				JFreeChart chart = ChartFactory.createScatterPlot("MLP", // Title
-						"x", // X-axis label
-						"y", // Y-axis label
-						chartDataset, // Dataset
-						PlotOrientation.VERTICAL, // Orientation
-						true, // Include legend
-						true, // Tooltips
-						false // URLs
-				);
-
-				XYPlot plot = (XYPlot) chart.getPlot();
-
-				XYItemRenderer renderer = plot.getRenderer();
-				coloredSeries.forEach((series, color) -> {
-					int seriesIndex = chartDataset.getSeriesIndex(series.getKey());
-					renderer.setSeriesPaint(seriesIndex, color);
-				});
-
-				addContour(visualState.contourState(), visualState, plot, mlpSupplier);
-
-				ChartPanel chartPanel = new ChartPanel(chart);
-
-				visualPanel.removeAll();
-				visualPanel.add(chartPanel);
-			}
+		var ctx = new Object() {
+			Map<List<Double>, Double> dataset;
+			MLP mlp;
 		};
-		datasetNotifier.addListener(datasetListener);
+
+		Runnable repainter = () -> {
+			if (ctx.mlp == null || ctx.dataset == null) {
+				// Incomplete context, don't paint yet
+				return;
+			}
+
+			BiFunction<VisualDatasetState, Integer, List<Double>> valuesExtractor = (datasetState, index) -> {
+				return ctx.dataset.entrySet().stream()//
+						.filter(entry -> datasetState.predicate().test(entry.getValue()))//
+						.map(Entry::getKey)//
+						.map(list -> list.get(index))//
+						.toList();
+			};
+			Function<VisualDatasetState, SeriesDefinition> seriesFactory = datasetState -> {
+				return new SeriesDefinition(//
+						valuesExtractor.apply(datasetState, visualState.xIndex()), //
+						valuesExtractor.apply(datasetState, visualState.yIndex()), //
+						datasetState.label());
+			};
+			Map<XYSeries, Color> coloredSeries = visualState.datasetStates().stream()//
+					.collect(toMap(//
+							datasetState -> createSeries(seriesFactory.apply(datasetState)), //
+							datasetState -> datasetState.color()//
+			));
+			XYSeriesCollection chartDataset = new XYSeriesCollection();
+			coloredSeries.keySet().forEach(chartDataset::addSeries);
+
+			JFreeChart chart = ChartFactory.createScatterPlot("MLP", // Title
+					"x", // X-axis label
+					"y", // Y-axis label
+					chartDataset, // Dataset
+					PlotOrientation.VERTICAL, // Orientation
+					true, // Include legend
+					true, // Tooltips
+					false // URLs
+			);
+
+			XYPlot plot = (XYPlot) chart.getPlot();
+
+			XYItemRenderer renderer = plot.getRenderer();
+			coloredSeries.forEach((series, color) -> {
+				int seriesIndex = chartDataset.getSeriesIndex(series.getKey());
+				renderer.setSeriesPaint(seriesIndex, color);
+			});
+
+			addContour(visualState.contourState(), visualState, plot, ctx.mlp);
+
+			ChartPanel chartPanel = new ChartPanel(chart);
+
+			visualPanel.removeAll();
+			visualPanel.add(chartPanel);
+		};
+
+		// Update data upon notification
+		datasetNotifier.addListener(dataset -> ctx.dataset = dataset);
+		mlpNotifier.addListener(mlp -> ctx.mlp = mlp);
+
+		// Repaint upon notification
+		datasetNotifier.addListener(_ -> repainter.run());
+		mlpNotifier.addListener(_ -> repainter.run());
 
 		Consumer<List<RoundResult>> visualUpdater = _ -> {
 			Component component = visualPanel.getComponent(0);
@@ -550,7 +584,7 @@ public class App extends JFrame {
 	}
 
 	private static JPanel createTrainPanel(TrainState trainState, Consumer<List<RoundResult>> roundsConsumer,
-			DataNotifier<Map<List<Double>, Double>> datasetNotifier, Supplier<MLP> mlpSupplier) {
+			DataNotifier<Map<List<Double>, Double>> datasetNotifier, DataNotifier<MLP> mlpNotifier) {
 		JTextField roundsLimitField = FieldBuilder.buildFieldFor(trainState.roundsLimit())//
 				.intoText(src -> src.get().map(Object::toString).orElse(""))//
 				.as(Long::parseLong).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
@@ -581,7 +615,7 @@ public class App extends JFrame {
 
 		roundsConsumer = lossFieldUpdater.andThen(roundsConsumer);
 		JToggleButton trainButton = new JToggleButton(
-				createTrainAction(trainState, roundsConsumer, datasetNotifier, mlpSupplier));
+				createTrainAction(trainState, roundsConsumer, datasetNotifier, mlpNotifier));
 
 		JPanel trainPanel = new JPanel();
 		trainPanel.setLayout(new GridBagLayout());
@@ -618,7 +652,9 @@ public class App extends JFrame {
 		return trainPanel;
 	}
 
-	private static void createMlpDot(NeuralNetState neuralNetState, NeuralNetBrowser neuralNetBrowser, Path dotPath) {
+	private static void createMlpDot(NeuralNetState neuralNetState, Supplier<NeuralNetBrowser> neuralNetBrowserSupplier,
+			Path dotPath) {
+		NeuralNetBrowser neuralNetBrowser = neuralNetBrowserSupplier.get();
 		Map<Object, String> ids = new HashMap<>();
 		File dotFile = dotPath.toFile();
 		try (PrintWriter dotWriter = new PrintWriter(dotFile)) {
@@ -739,13 +775,12 @@ public class App extends JFrame {
 		return xs.stream().mapToDouble(d -> d).toArray();
 	}
 
-	private static void addContour(ContourState contourState, VisualState visualState, XYPlot plot,
-			Supplier<MLP> mlpSupplier) {
+	private static void addContour(ContourState contourState, VisualState visualState, XYPlot plot, MLP mlp) {
 		Function<Double, Paint> contourPainter = createContourPainter(contourState, visualState);
 		ContourDimension dimX = createContourDimension(plot.getDomainAxis(), contourState.resolution().x());
 		ContourDimension dimY = createContourDimension(plot.getRangeAxis(), contourState.resolution().y());
 		XYBlockRenderer contourRenderer = createContourRenderer(contourState, contourPainter, dimX, dimY);
-		XYZDataset contourDataset = createContourDataset(contourState, dimX, dimY, mlpSupplier);
+		XYZDataset contourDataset = createContourDataset(contourState, dimX, dimY, mlp);
 
 		int newIndex = plot.getDatasetCount();
 		plot.setDataset(newIndex, contourDataset);
@@ -784,7 +819,7 @@ public class App extends JFrame {
 	}
 
 	private static XYZDataset createContourDataset(ContourState contourState, ContourDimension dimX,
-			ContourDimension dimY, Supplier<MLP> mlpSupplier) {
+			ContourDimension dimY, MLP mlp) {
 		return new XYZDataset() {
 			@Override
 			public int getSeriesCount() {
@@ -814,7 +849,7 @@ public class App extends JFrame {
 			public double getZValue(int series, int item) {
 				double x = getXValue(series, item);
 				double y = getYValue(series, item);
-				return contourState.functionFactory().apply(mlpSupplier.get()).apply(x, y);
+				return contourState.functionFactory().apply(mlp).apply(x, y);
 			}
 
 			@Override
@@ -870,13 +905,17 @@ public class App extends JFrame {
 	}
 
 	private static AbstractAction createTrainAction(TrainState trainState, Consumer<List<RoundResult>> roundsConsumer,
-			DataNotifier<Map<List<Double>, Double>> datasetNotifier, Supplier<MLP> mlpSupplier) {
+			DataNotifier<Map<List<Double>, Double>> datasetNotifier, DataNotifier<MLP> mlpNotifier) {
 
 		var ctx = new Object() {
 			Map<List<Double>, Double> dataset = null;
+			MLP mlp = null;
 		};
+
+		// Update data upon notification
 		datasetNotifier.addListener(dataset -> ctx.dataset = dataset);
-		Supplier<Map<List<Double>, Double>> datasetSupplier = () -> ctx.dataset;
+		mlpNotifier.addListener(mlp -> ctx.mlp = mlp);
+
 		return new AbstractAction("Train") {
 			long round = 0;
 
@@ -923,20 +962,20 @@ public class App extends JFrame {
 						private void computeRound() {
 							batchedRound++;
 							round++;
-							Map<List<Double>, Double> dataset = datasetSupplier.get();
-							MLP mlp = mlpSupplier.get();
-							Instant start = Instant.now();
+							Map<List<Double>, Double> dataset = ctx.dataset;
+							MLP mlp = ctx.mlp;
+							Instant startInstant = Instant.now();
 							Value loss = mlp.computeLoss(dataset);
-							Instant computeTime = Instant.now();
+							Instant computedInstant = Instant.now();
 							loss.backward();
-							Instant backwardTime = Instant.now();
+							Instant backwardedInstant = Instant.now();
 							mlp.updateParameters(trainState.updateStep().get());
-							Instant updateTime = Instant.now();
+							Instant updatedInstant = Instant.now();
 							RoundData data = new RoundData(//
 									loss, //
-									Duration.between(start, computeTime), //
-									Duration.between(computeTime, backwardTime), //
-									Duration.between(backwardTime, updateTime)//
+									Duration.between(startInstant, computedInstant), //
+									Duration.between(computedInstant, backwardedInstant), //
+									Duration.between(backwardedInstant, updatedInstant)//
 							);
 							results.add(new RoundResult(round, data));
 						}
@@ -1082,7 +1121,7 @@ public class App extends JFrame {
 	private record SeriesDefinition(List<Double> xs, List<Double> ys, String lineTitle) {
 	}
 
-	private record Parts(JPanel panel, Consumer<List<RoundResult>> panelUpdater, Supplier<MLP> mlpSupplier,
+	private record Parts(JPanel panel, Consumer<List<RoundResult>> panelUpdater, DataNotifier<MLP> mlpNotifier,
 			DataNotifier<Map<List<Double>, Double>> datasetNotifier) {
 	}
 
@@ -1093,7 +1132,7 @@ public class App extends JFrame {
 	) {
 	}
 
-	class DataNotifier<T> {
+	static class DataNotifier<T> {
 		private final List<DataNotifier.Listener<T>> listeners = new LinkedList<>();
 
 		void addListener(DataNotifier.Listener<T> listener) {

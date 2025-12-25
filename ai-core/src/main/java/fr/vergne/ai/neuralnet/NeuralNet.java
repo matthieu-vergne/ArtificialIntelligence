@@ -576,7 +576,8 @@ public class NeuralNet {
 								
 								@Override
 								public double weight() {
-									return neuron.weights().get(index).data().get();
+									int indexInLayer = index-indexRange.min();
+									return neuron.weights().get(indexInLayer).data().get();
 								}
 							});
 						}

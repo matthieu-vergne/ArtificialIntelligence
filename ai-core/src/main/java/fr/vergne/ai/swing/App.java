@@ -1,6 +1,5 @@
 package fr.vergne.ai.swing;
 
-import static fr.vergne.ai.utils.LambdaUtils.memoize;
 import static java.util.stream.Collectors.toMap;
 
 import java.awt.Color;
@@ -18,6 +17,7 @@ import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -27,6 +27,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -80,24 +81,82 @@ import org.w3c.dom.NodeList;
 import org.w3c.dom.svg.SVGDocument;
 import org.w3c.dom.svg.SVGSVGElement;
 
-import fr.vergne.ai.neuralnet.NeuralNet.Input;
-import fr.vergne.ai.neuralnet.NeuralNet.Layer;
+import fr.vergne.ai.neuralnet.Dataset;
+import fr.vergne.ai.neuralnet.NeuralNet.InputsBrowser;
 import fr.vergne.ai.neuralnet.NeuralNet.MLP;
 import fr.vergne.ai.neuralnet.NeuralNet.NeuralNetBrowser;
-import fr.vergne.ai.neuralnet.NeuralNet.Neuron;
 import fr.vergne.ai.neuralnet.NeuralNet.Operator;
+import fr.vergne.ai.neuralnet.NeuralNet.ParameterNamer;
 import fr.vergne.ai.neuralnet.NeuralNet.Value;
 import fr.vergne.ai.utils.LambdaUtils;
 
 @SuppressWarnings("serial")
 public class App extends JFrame {
-	public App(Conf conf, Map<List<Double>, Double> dataset, MLP mlp, Supplier<RoundData> mlpRound) {
-		this.setTitle("MLP");
+	public App() {
+		// TODO Use from conf
+		Random random = new Random(0);
 
 		// TODO Create conf panel
+		Conf conf;
+		{
+			AtomicReference<Optional<Long>> roundsLimit = new AtomicReference<>(Optional.empty());
+			AtomicLong batchSize = new AtomicLong(1);
+			AtomicReference<Double> updateStep = new AtomicReference<Double>(0.001);
+			TrainConf trainConf = new TrainConf(roundsLimit, batchSize, updateStep);
+
+			Collection<VisualDatasetConf> datasetConfs = List.of(//
+					new VisualDatasetConf("1.0", value -> value > 0, Color.RED), //
+					new VisualDatasetConf("-1.0", value -> value < 0, Color.BLUE)//
+			);
+
+			Resolution contourResolution = new Resolution(100, 100);
+			BiFunction<Color, Double, Color> colorTransformation = (color, value) -> adaptSaturation(color,
+					Math.abs(value) * 0.6);
+			Function<MLP, BinaryOperator<Double>> contourFunctionFactory = mlp2 -> (x, y) -> {
+				return mlp2.computeRaw(List.of(x, y)).get(0);
+			};
+			ContourConf contourConf = new ContourConf("MLP", contourResolution, colorTransformation,
+					contourFunctionFactory);
+
+			int xIndex = 0;
+			int yIndex = 1;
+			Color defaultColor = Color.BLACK;// transparent
+			VisualConf visualConf = new VisualConf(xIndex, yIndex, defaultColor, datasetConfs, contourConf);
+
+			PlotUtils.WindowFactory windowFactory = switch (2) {
+			case 1 -> PlotUtils.createNoWindowFactory();
+			case 2 -> PlotUtils.createFixedWindowFactory(100);
+			case 3 -> PlotUtils.createSlidingWindowFactory(10);
+			default -> throw new IllegalArgumentException("Unexpected window factory");
+			};
+			RectangleEdge legendPosition = RectangleEdge.TOP;
+			TimePlotConf timePlotConf = new TimePlotConf(windowFactory, legendPosition);
+
+			LossPlotConf lossPlotConf = new LossPlotConf(windowFactory);
+
+			int displayedDecimals = 4;
+			Color clusterColor = Color.LIGHT_GRAY;
+			NeuralNetConf neuralNetConf = new NeuralNetConf(random, displayedDecimals, clusterColor);
+
+			conf = new Conf(trainConf, neuralNetConf, visualConf, lossPlotConf, timePlotConf);
+		}
+
 		// TODO Create dataset panel
-		Parts mlpParts = createMlpPanel(conf.neuralNetConf(), mlp);
-		Parts visualParts = createVisual(conf.visualConf(), dataset);
+		Supplier<Map<List<Double>, Double>> datasetSupplier;
+		{
+			Map<List<Double>, Double> dataset = switch (1) {
+			case 1 -> Dataset.circle(random);
+			case 2 -> Dataset.columns1(random);
+			case 3 -> Dataset.columns2(random);
+			case 4 -> Dataset.steepColumns(random);
+			case 5 -> Dataset.moons(random);
+			default -> throw new IllegalArgumentException("Unexpected dataset outputs");
+			};
+			datasetSupplier = () -> dataset;
+		}
+
+		Parts mlpParts = createMlpPanel(conf.neuralNetConf());
+		Parts visualParts = createVisual(conf.visualConf(), datasetSupplier, mlpParts.mlpSupplier());
 		Parts lossPlotParts = createLossPlot(conf.lossPlotConf());
 		Parts timePlotParts = createTimePlot(conf.timePlotConf());
 
@@ -113,7 +172,7 @@ public class App extends JFrame {
 				.andThen(timePlotParts.panelUpdater())//
 		;
 
-		JPanel trainPanel = createTrainPanel(conf.trainConf(), mlpRound, roundConsumer);
+		JPanel trainPanel = createTrainPanel(conf.trainConf(), roundConsumer, datasetSupplier, mlpParts.mlpSupplier());
 
 		this.setLayout(new GridBagLayout());
 		GridBagConstraints constraints = new GridBagConstraints();
@@ -127,18 +186,28 @@ public class App extends JFrame {
 		constraints.weighty = 0.0;
 		constraints.fill = GridBagConstraints.HORIZONTAL;
 		this.add(trainPanel, constraints);
+
+		this.setTitle("MLP");
 	}
 
-	private Parts createMlpPanel(NeuralNetConf neuralNetConf, MLP mlp) {
-		// TODO Factor DOT producer + NeuralNetBrowser + SVG updater (node IDs, etc.)
+	private Parts createMlpPanel(NeuralNetConf neuralNetConf) {
 		// TODO Support NeuralNet building
-		Function<Input, String> inputIdSupplier = memoize(prefixedCounterId("I"));
-		Function<Neuron, String> neuronIdSupplier = memoize(prefixedCounterId("N"));
-		Function<Layer, String> layerIdSupplier = memoize(prefixedCounterId("L"));
+		MLP mlp = switch (1) {
+		case 1 ->
+			new MLP(ParameterNamer.create(), 2, List.of(4, 1), (_) -> neuralNetConf.random().nextDouble(-1.0, 1.0));
+		case 2 ->
+			new MLP(ParameterNamer.create(), 2, List.of(20, 1), (_) -> neuralNetConf.random().nextDouble(-1.0, 1.0));
+		case 3 -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1),
+				(_) -> neuralNetConf.random().nextDouble(-1.0, 1.0));
+		default -> throw new IllegalArgumentException("Unexpected MLP");
+		};
+
+		NeuralNetBrowser neuralNetBrowser = NeuralNetBrowser.forMlp(mlp, prefixedCounterId("I"), prefixedCounterId("N"),
+				prefixedCounterId("L"));
 
 		String fileName = "graph";
 		Path dotPath = createTempPath(fileName, "dot");
-		createMlpDot(neuralNetConf, mlp, dotPath, inputIdSupplier, neuronIdSupplier, layerIdSupplier);
+		createMlpDot(neuralNetConf, neuralNetBrowser, dotPath);
 
 		Path svgPath = createTempPath(fileName, "svg");
 		dotToFile(dotPath, svgPath, "svg");
@@ -171,7 +240,6 @@ public class App extends JFrame {
 					// TODO Use app locale?
 					return String.format(Locale.US, "%." + decimals + "f", value);
 				};
-				NeuralNetBrowser mlpBrowser = NeuralNetBrowser.forMlp(mlp);
 				streamOf(root.getElementsByTagName("g")).forEach(groupNode -> {
 					String title = titleOf(groupNode);
 					if (title.matches("[IN][0-9]+->N[0-9]+")) {
@@ -179,12 +247,12 @@ public class App extends JFrame {
 						int separatorEnd = separatorStart + 2;
 						String inputId = title.substring(0, separatorStart);
 						String outputId = title.substring(separatorEnd);
-						double weight = mlpBrowser.neuron(outputId).weightWith(inputId);
+						double weight = neuralNetBrowser.neuron(outputId).weightWith(inputId);
 						Node weightNode = findFirstChild(groupNode, "text").orElseThrow();
 						weightNode.setTextContent(parameterFormatter.apply(weight));
 					} else if (title.matches("N[0-9]+")) {
 						String neuronId = title;
-						double bias = mlpBrowser.neuron(neuronId).bias();
+						double bias = neuralNetBrowser.neuron(neuronId).bias();
 						// First text is node name, bias is next one
 						Node biasNode = findSecondChild(groupNode, "text").orElseThrow();
 						biasNode.setTextContent(parameterFormatter.apply(bias));
@@ -196,7 +264,7 @@ public class App extends JFrame {
 			;
 		};
 
-		JPanel exportPanel = createExportPanel(neuralNetConf, mlp, inputIdSupplier, neuronIdSupplier, layerIdSupplier);
+		JPanel exportPanel = createExportPanel(neuralNetConf, neuralNetBrowser);
 
 		JPanel mlpPanel = new JPanel();
 		mlpPanel.setLayout(new GridBagLayout());
@@ -210,11 +278,10 @@ public class App extends JFrame {
 		constraints.weighty = 0.0;
 		mlpPanel.add(exportPanel, constraints);
 
-		return new Parts(mlpPanel, mlpUpdater);
+		return new Parts(mlpPanel, mlpUpdater, () -> mlp);
 	}
 
-	private JPanel createExportPanel(NeuralNetConf neuralNetConf, MLP mlp, Function<Input, String> inputIdSupplier,
-			Function<Neuron, String> neuronIdSupplier, Function<Layer, String> layerIdSupplier) {
+	private JPanel createExportPanel(NeuralNetConf neuralNetConf, NeuralNetBrowser neuralNetBrowser) {
 		JPanel exportPanel = new JPanel();
 		exportPanel.setLayout(new FlowLayout(FlowLayout.CENTER));
 		exportPanel.add(new JButton(new AbstractAction("Export") {
@@ -248,15 +315,13 @@ public class App extends JFrame {
 						if (existsAndOverrideRejected(file)) {
 							return; // User chose not to overwrite, do nothing
 						}
-						createMlpDot(neuralNetConf, mlp, file.toPath(), inputIdSupplier, neuronIdSupplier,
-								layerIdSupplier);
+						createMlpDot(neuralNetConf, neuralNetBrowser, file.toPath());
 					} else if (fileName.endsWith(".svg") || fileName.endsWith(".pdf") || fileName.endsWith(".png")) {
 						if (existsAndOverrideRejected(file)) {
 							return; // User chose not to overwrite, do nothing
 						}
 						Path tempDotPath = createTempPath(fileName, "dot");
-						createMlpDot(neuralNetConf, mlp, tempDotPath, inputIdSupplier, neuronIdSupplier,
-								layerIdSupplier);
+						createMlpDot(neuralNetConf, neuralNetBrowser, tempDotPath);
 						String ext = fileName.substring(fileName.length() - 3);
 						dotToFile(tempDotPath, file.toPath(), ext);
 					} else {
@@ -283,9 +348,10 @@ public class App extends JFrame {
 		return exportPanel;
 	}
 
-	private static Parts createVisual(VisualConf visualConf, Map<List<Double>, Double> dataset) {
+	private static Parts createVisual(VisualConf visualConf, Supplier<Map<List<Double>, Double>> datasetSupplier,
+			Supplier<MLP> mlpSupplier) {
 		BiFunction<VisualDatasetConf, Integer, List<Double>> valuesExtractor = (datasetConf1, index) -> {
-			return dataset.entrySet().stream()//
+			return datasetSupplier.get().entrySet().stream()//
 					.filter(entry -> datasetConf1.predicate().test(entry.getValue()))//
 					.map(Entry::getKey)//
 					.map(list -> list.get(index))//
@@ -323,7 +389,7 @@ public class App extends JFrame {
 			renderer.setSeriesPaint(seriesIndex, color);
 		});
 
-		addContour(visualConf.contourConf(), visualConf, plot);
+		addContour(visualConf.contourConf(), visualConf, plot, mlpSupplier);
 
 		Consumer<List<RoundResult>> visualUpdater = _ -> {
 			chart.fireChartChanged();
@@ -331,7 +397,7 @@ public class App extends JFrame {
 
 		ChartPanel visualPanel = new ChartPanel(chart);
 
-		return new Parts(visualPanel, visualUpdater);
+		return new Parts(visualPanel, visualUpdater, null);
 	}
 
 	private static Parts createLossPlot(LossPlotConf lossPlotConf) {
@@ -366,7 +432,7 @@ public class App extends JFrame {
 
 		ChartPanel chartPanel = new ChartPanel(chart);
 
-		return new Parts(chartPanel, lossPlotUpdater);
+		return new Parts(chartPanel, lossPlotUpdater, null);
 	}
 
 	private static Parts createTimePlot(TimePlotConf timePlotConf) {
@@ -422,11 +488,11 @@ public class App extends JFrame {
 
 		ChartPanel chartPanel = new ChartPanel(chart);
 
-		return new Parts(chartPanel, lossPlotUpdater);
+		return new Parts(chartPanel, lossPlotUpdater, null);
 	}
 
-	private static JPanel createTrainPanel(TrainConf trainConf, Supplier<RoundData> mlpRound,
-			Consumer<List<RoundResult>> roundConsumer) {
+	private static JPanel createTrainPanel(TrainConf trainConf, Consumer<List<RoundResult>> roundsConsumer,
+			Supplier<Map<List<Double>, Double>> datasetSupplier, Supplier<MLP> mlpSupplier) {
 		JTextField roundsLimitField = FieldBuilder.buildFieldFor(trainConf.roundsLimit())//
 				.intoText(src -> src.get().map(Object::toString).orElse(""))//
 				.as(Long::parseLong).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
@@ -455,8 +521,9 @@ public class App extends JFrame {
 			});
 		};
 
-		JToggleButton trainButton = new JToggleButton(createTrainAction(trainConf, mlpRound, roundConsumer));
-		roundConsumer = lossFieldUpdater.andThen(roundConsumer);
+		roundsConsumer = lossFieldUpdater.andThen(roundsConsumer);
+		JToggleButton trainButton = new JToggleButton(
+				createTrainAction(trainConf, roundsConsumer, datasetSupplier, mlpSupplier));
 
 		JPanel trainPanel = new JPanel();
 		trainPanel.setLayout(new GridBagLayout());
@@ -493,61 +560,39 @@ public class App extends JFrame {
 		return trainPanel;
 	}
 
-	private static void createMlpDot(NeuralNetConf neuralNetConf, MLP mlp, Path dotPath,
-			Function<Input, String> inputIdSupplier, Function<Neuron, String> neuronIdSupplier,
-			Function<Layer, String> layerIdSupplier) {
+	private static void createMlpDot(NeuralNetConf neuralNetConf, NeuralNetBrowser neuralNetBrowser, Path dotPath) {
 		Map<Object, String> ids = new HashMap<>();
 		File dotFile = dotPath.toFile();
 		try (PrintWriter dotWriter = new PrintWriter(dotFile)) {
 			dotWriter.println("digraph G {");
 			dotWriter.println("rankdir=LR");
 
-			// Assume MLP, so all neurons of first layer have same inputs
-			int inputsSize = mlp.layer(0).neuron(0).weights().size();
-
-			// Manage inter-layers linking, since the info is not available from the MLP
-			// TODO get input info from neuron to be agnostic of neural net architecture
-			List<Object> previousLayer = new LinkedList<>();
-			List<Object> currentLayer = new LinkedList<>();
-
-			// Insert input layers with custom logics, since no object exists for them in
-			// the MLP
-			// TODO get input info from neuron to be agnostic of neural net architecture
-			// TODO reuse non-input loop?
-			String inputLayerId = layerIdSupplier.apply(null);
-			dotWriter.println("subgraph cluster_" + inputLayerId + " {");
+			InputsBrowser inputsCluster = neuralNetBrowser.inputsCluster();
+			String inputsClusterId = inputsCluster.id().toString();
+			dotWriter.println("subgraph cluster_" + inputsClusterId + " {");
 			dotWriter.println("color=" + dotColorCoder(neuralNetConf.clusterColor()) + ";");
-			dotWriter.println("label = \"" + inputLayerId + "\";");
-			IntStream.range(0, inputsSize).mapToObj(Input::new).forEach(input -> {
-				currentLayer.add(input);
-				String inputId = inputIdSupplier.apply(input);
+			dotWriter.println("label = \"" + inputsClusterId + "\";");
+			inputsCluster.inputs().forEach(input -> {
+				String inputId = input.id().toString();
 				ids.put(input, inputId);
 				dotWriter.println(inputId + " [label=\"" + inputId + "\", shape=square];");
 			});
 			dotWriter.println("}");
 
-			// Insert non-input layers
-			mlp.layers().forEach(layer -> {
-				previousLayer.clear();
-				previousLayer.addAll(currentLayer);
-				currentLayer.clear();
-
-				String layerId = layerIdSupplier.apply(layer);
-				// TODO identify clusters from neurons with common inputs
-				dotWriter.println("subgraph cluster_" + layerId + " {");
+			neuralNetBrowser.neuronsClusters().forEach(cluster -> {
+				String clusterId = cluster.id().toString();
+				dotWriter.println("subgraph cluster_" + clusterId + " {");
 				dotWriter.println("color=" + dotColorCoder(neuralNetConf.clusterColor()) + ";");
-				dotWriter.println("label = \"" + layerId + "\";");
-				layer.neurons().forEach(neuron -> {
-					currentLayer.add(neuron);
-					String neuronId = neuronIdSupplier.apply(neuron);
+				dotWriter.println("label = \"" + clusterId + "\";");
+				cluster.neurons().forEach(neuron -> {
+					String neuronId = neuron.id().toString();
 					ids.put(neuron, neuronId);
-					double bias = neuron.bias().data().get();
+					double bias = neuron.bias();
 					dotWriter.println(
 							neuronId + " [label=\"{{" + neuronId + " | " + roundForDot(bias) + "}}\", shape=record];");
-					previousLayer.forEach(input -> {
-						double weight = neuron.weights().get(previousLayer.indexOf(input)).data().get();
+					neuron.weightedInputs().forEach(input -> {
 						dotWriter.println(
-								ids.get(input) + " -> " + neuronId + " [label=\"" + roundForDot(weight) + "\"];");
+								input.id() + " -> " + neuronId + " [label=\"" + roundForDot(input.weight()) + "\"];");
 					});
 				});
 				dotWriter.println("}");
@@ -593,9 +638,9 @@ public class App extends JFrame {
 		}
 	}
 
-	private static <T> Function<T, String> prefixedCounterId(String prefix) {
+	private static <T> Supplier<String> prefixedCounterId(String prefix) {
 		AtomicInteger counter = new AtomicInteger();
-		return _ -> prefix + counter.getAndIncrement();
+		return () -> prefix + counter.getAndIncrement();
 	}
 
 	private static Stream<Node> streamOf(NodeList nodeList) {
@@ -636,12 +681,13 @@ public class App extends JFrame {
 		return xs.stream().mapToDouble(d -> d).toArray();
 	}
 
-	private static void addContour(ContourConf contourConf, VisualConf visualConf, XYPlot plot) {
+	private static void addContour(ContourConf contourConf, VisualConf visualConf, XYPlot plot,
+			Supplier<MLP> mlpSupplier) {
 		Function<Double, Paint> contourPainter = createContourPainter(contourConf, visualConf);
 		ContourDimension dimX = createContourDimension(plot.getDomainAxis(), contourConf.resolution().x());
 		ContourDimension dimY = createContourDimension(plot.getRangeAxis(), contourConf.resolution().y());
 		XYBlockRenderer contourRenderer = createContourRenderer(contourConf, contourPainter, dimX, dimY);
-		XYZDataset contourDataset = createContourDataset(contourConf, dimX, dimY);
+		XYZDataset contourDataset = createContourDataset(contourConf, dimX, dimY, mlpSupplier);
 
 		int newIndex = plot.getDatasetCount();
 		plot.setDataset(newIndex, contourDataset);
@@ -680,7 +726,7 @@ public class App extends JFrame {
 	}
 
 	private static XYZDataset createContourDataset(ContourConf contourConf, ContourDimension dimX,
-			ContourDimension dimY) {
+			ContourDimension dimY, Supplier<MLP> mlpSupplier) {
 		return new XYZDataset() {
 			@Override
 			public int getSeriesCount() {
@@ -710,7 +756,7 @@ public class App extends JFrame {
 			public double getZValue(int series, int item) {
 				double x = getXValue(series, item);
 				double y = getYValue(series, item);
-				return contourConf.function().apply(x, y);
+				return contourConf.functionFactory().apply(mlpSupplier.get()).apply(x, y);
 			}
 
 			@Override
@@ -765,8 +811,8 @@ public class App extends JFrame {
 		};
 	}
 
-	private static AbstractAction createTrainAction(TrainConf trainConf, Supplier<RoundData> mlpRound,
-			Consumer<List<RoundResult>> roundConsumer) {
+	private static AbstractAction createTrainAction(TrainConf trainConf, Consumer<List<RoundResult>> roundsConsumer,
+			Supplier<Map<List<Double>, Double>> datasetSupplier, Supplier<MLP> mlpSupplier) {
 		return new AbstractAction("Train") {
 			long round = 0;
 
@@ -813,12 +859,28 @@ public class App extends JFrame {
 						private void computeRound() {
 							batchedRound++;
 							round++;
-							RoundData data = mlpRound.get();
+							Function<MLP, RoundData> mlpRound = mlp2 -> {
+								Instant start = Instant.now();
+								Value loss = mlp2.computeLoss(datasetSupplier.get());
+								Instant computeTime = Instant.now();
+								loss.backward();
+								Instant backwardTime = Instant.now();
+								mlp2.updateParameters(trainConf.updateStep().get());
+								Instant updateTime = Instant.now();
+								return new RoundData(//
+										loss, //
+										Duration.between(start, computeTime), //
+										Duration.between(computeTime, backwardTime), //
+										Duration.between(backwardTime, updateTime)//
+								);
+							};
+
+							RoundData data = mlpRound.apply(mlpSupplier.get());
 							results.add(new RoundResult(round, data));
 						}
 
 						private void sendDataAndClean() {
-							roundConsumer.accept(results);
+							roundsConsumer.accept(results);
 							results.clear();
 							batchedRound = 0;
 						}
@@ -884,8 +946,13 @@ public class App extends JFrame {
 		return Optional.ofNullable(data.get()).map(App::roundForDot).map(Object::toString).orElse("∅");
 	}
 
-	// TODO Make private
-	public record Resolution(int x, int y) {
+	private Color adaptSaturation(Color color, double factor) {
+		float[] hsb = Color.RGBtoHSB(color.getRed(), color.getGreen(), color.getBlue(), null);
+		hsb[1] *= factor;
+		return Color.getHSBColor(hsb[0], hsb[1], hsb[2]);
+	}
+
+	record Resolution(int x, int y) {
 	}
 
 	record ContourDimension(double min, double max, int resolution) {
@@ -894,23 +961,20 @@ public class App extends JFrame {
 		}
 	}
 
-	// TODO Make private
-	public record RoundData(Value loss, Duration computeDuration, Duration backwardDuration, Duration updateDuration) {
+	record RoundData(Value loss, Duration computeDuration, Duration backwardDuration, Duration updateDuration) {
 	}
 
 	record RoundResult(long round, RoundData data) {
 	}
 
-	// TODO Make private
-	public record VisualDatasetConf(//
+	record VisualDatasetConf(//
 			String label, //
 			Predicate<Double> predicate, //
 			Color color//
 	) {
 	}
 
-	// TODO Make private
-	public record VisualConf(//
+	record VisualConf(//
 			int xIndex, //
 			int yIndex, //
 			Color defaultColor, //
@@ -919,29 +983,28 @@ public class App extends JFrame {
 	) {
 	}
 
-	// TODO Make private
-	public record ContourConf(//
+	record ContourConf(//
 			String name, //
 			Resolution resolution, //
 			BiFunction<Color, Double, Color> colorTransformation, //
-			BinaryOperator<Double> function //
+			Function<MLP, BinaryOperator<Double>> functionFactory //
 	) {
 	}
 
-	// TODO Make private
-	public record TimePlotConf(PlotUtils.WindowFactory windowFactory, RectangleEdge legendPosition) {
+	record TimePlotConf(PlotUtils.WindowFactory windowFactory, RectangleEdge legendPosition) {
 	}
 
-	// TODO Make private
-	public record LossPlotConf(PlotUtils.WindowFactory windowFactory) {
+	record LossPlotConf(PlotUtils.WindowFactory windowFactory) {
 	}
 
-	// TODO Make private
-	public record NeuralNetConf(int displayedDecimals, Color clusterColor) {
+	record NeuralNetConf(//
+			Random random, //
+			int displayedDecimals, //
+			Color clusterColor//
+	) {
 	}
 
-	// TODO Make private
-	public record Conf(//
+	record Conf(//
 			TrainConf trainConf, //
 			NeuralNetConf neuralNetConf, //
 			VisualConf visualConf, //
@@ -953,11 +1016,10 @@ public class App extends JFrame {
 	private record SeriesDefinition(List<Double> xs, List<Double> ys, String lineTitle) {
 	}
 
-	private record Parts(JPanel panel, Consumer<List<RoundResult>> panelUpdater) {
+	private record Parts(JPanel panel, Consumer<List<RoundResult>> panelUpdater, Supplier<MLP> mlpSupplier) {
 	}
 
-	// TODO Make private
-	public record TrainConf(//
+	record TrainConf(//
 			AtomicReference<Optional<Long>> roundsLimit, //
 			AtomicLong batchSize, //
 			AtomicReference<Double> updateStep//

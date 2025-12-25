@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.function.BiFunction;
 
-interface Dataset {
+public interface Dataset {
 	public static Map<List<Double>, Double> moons(Random random) {
 		BiFunction<Double, Double, Double> noise = (value, amplitude) -> {
 			return value + random.nextDouble(-amplitude, amplitude);

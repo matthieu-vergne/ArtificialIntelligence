@@ -2,21 +2,14 @@ package fr.vergne.ai.neuralnet;
 
 import static java.util.stream.Collectors.toMap;
 
-import java.awt.Color;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Optional;
-import java.util.Random;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 import java.util.function.BinaryOperator;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -25,20 +18,7 @@ import java.util.stream.Stream;
 
 import javax.swing.JFrame;
 
-import org.jfree.chart.ui.RectangleEdge;
-
 import fr.vergne.ai.swing.App;
-import fr.vergne.ai.swing.App.Conf;
-import fr.vergne.ai.swing.App.ContourConf;
-import fr.vergne.ai.swing.App.LossPlotConf;
-import fr.vergne.ai.swing.App.NeuralNetConf;
-import fr.vergne.ai.swing.App.Resolution;
-import fr.vergne.ai.swing.App.RoundData;
-import fr.vergne.ai.swing.App.TimePlotConf;
-import fr.vergne.ai.swing.App.TrainConf;
-import fr.vergne.ai.swing.App.VisualConf;
-import fr.vergne.ai.swing.App.VisualDatasetConf;
-import fr.vergne.ai.swing.PlotUtils;
 
 public class NeuralNet {
 
@@ -264,7 +244,7 @@ public class NeuralNet {
 		}
 	}
 
-	public record Input(int i) {
+	public record Input(Object id) {
 	}
 
 	public record Neuron(List<Value> weights, Value bias) {
@@ -320,6 +300,8 @@ public class NeuralNet {
 					.toList());
 		}
 
+		// TODO Provide separate outputs (like inputs)
+		// TODO Parallelize computation
 		public MLP(ParameterNamer parameterNamer, int inputSize, List<Integer> layersNeuronsCounts,
 				Function<String, Double> paramInitializer) {
 			this(parameterNamer,
@@ -369,91 +351,11 @@ public class NeuralNet {
 	}
 
 	public static void main(String[] args) {
-		Random random = new Random(0);
-		// TODO Provide separate outputs (like inputs)
-		// TODO Parallelize computation
-		MLP mlp = switch (1) {
-		case 1 -> new MLP(ParameterNamer.create(), 2, List.of(4, 1), (_) -> random.nextDouble(-1.0, 1.0));
-		case 2 -> new MLP(ParameterNamer.create(), 2, List.of(20, 1), (_) -> random.nextDouble(-1.0, 1.0));
-		case 3 -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1), (_) -> random.nextDouble(-1.0, 1.0));
-		default -> throw new IllegalArgumentException("Unexpected MLP");
-		};
-		Map<List<Double>, Double> dataset = switch (1) {
-		case 1 -> Dataset.circle(random);
-		case 2 -> Dataset.columns1(random);
-		case 3 -> Dataset.columns2(random);
-		case 4 -> Dataset.steepColumns(random);
-		case 5 -> Dataset.moons(random);
-		default -> throw new IllegalArgumentException("Unexpected dataset outputs");
-		};
-
-		AtomicReference<Double> updateStep = new AtomicReference<Double>(0.001);
-		Supplier<RoundData> mlpRound = () -> {
-			Instant start = Instant.now();
-			Value loss = mlp.computeLoss(dataset);
-			Instant computeTime = Instant.now();
-			loss.backward();
-			Instant backwardTime = Instant.now();
-			mlp.updateParameters(updateStep.get());
-			Instant updateTime = Instant.now();
-			return new RoundData(//
-					loss, //
-					Duration.between(start, computeTime), //
-					Duration.between(computeTime, backwardTime), //
-					Duration.between(backwardTime, updateTime)//
-			);
-		};
-
-		AtomicReference<Optional<Long>> roundsLimit = new AtomicReference<>(Optional.empty());
-		AtomicLong batchSize = new AtomicLong(1);
-		TrainConf trainConf = new TrainConf(roundsLimit, batchSize, updateStep);
-
-		Collection<VisualDatasetConf> datasetConfs = List.of(//
-				new VisualDatasetConf("1.0", value -> value > 0, Color.RED), //
-				new VisualDatasetConf("-1.0", value -> value < 0, Color.BLUE)//
-		);
-
-		Resolution contourResolution = new Resolution(100, 100);
-		BiFunction<Color, Double, Color> colorTransformation = (color, value) -> adaptSaturation(color,
-				Math.abs(value) * 0.6);
-		BinaryOperator<Double> contourFunction = (x, y) -> {
-			return mlp.computeRaw(List.of(x, y)).get(0);
-		};
-		ContourConf contourConf = new ContourConf("MLP", contourResolution, colorTransformation, contourFunction);
-
-		int xIndex = 0;
-		int yIndex = 1;
-		Color defaultColor = Color.BLACK;// transparent
-		VisualConf visualConf = new VisualConf(xIndex, yIndex, defaultColor, datasetConfs, contourConf);
-
-		PlotUtils.WindowFactory windowFactory = switch (2) {
-		case 1 -> PlotUtils.createNoWindowFactory();
-		case 2 -> PlotUtils.createFixedWindowFactory(100);
-		case 3 -> PlotUtils.createSlidingWindowFactory(10);
-		default -> throw new IllegalArgumentException("Unexpected window factory");
-		};
-		RectangleEdge legendPosition = RectangleEdge.TOP;
-		TimePlotConf timePlotConf = new TimePlotConf(windowFactory, legendPosition);
-
-		LossPlotConf lossPlotConf = new LossPlotConf(windowFactory);
-
-		int displayedDecimals = 4;
-		Color clusterColor = Color.LIGHT_GRAY;
-		NeuralNetConf neuralNetConf = new NeuralNetConf(displayedDecimals, clusterColor);
-
-		Conf conf = new Conf(trainConf, neuralNetConf, visualConf, lossPlotConf, timePlotConf);
-
-		App app = new App(conf, dataset, mlp, mlpRound);
+		App app = new App();
 		app.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		app.pack();
 		app.setSize(840, 930);
 		app.setVisible(true);
-	}
-
-	private static Color adaptSaturation(Color color, double factor) {
-		float[] hsb = Color.RGBtoHSB(color.getRed(), color.getGreen(), color.getBlue(), null);
-		hsb[1] *= factor;
-		return Color.getHSBColor(hsb[0], hsb[1], hsb[2]);
 	}
 
 	static double polynom(double x, Iterable<Double> factors) {
@@ -483,7 +385,7 @@ public class NeuralNet {
 		};
 	}
 
-	interface ParameterNamer extends Supplier<String> {
+	public interface ParameterNamer extends Supplier<String> {
 		String get();
 
 		public static ParameterNamer create() {
@@ -516,20 +418,105 @@ public class NeuralNet {
 		}
 	}
 
-	public interface NeuronDescriptor {
+	public interface NeuronBrowser {
+		Object id();
+
+		Stream<WeightedInputBrowser> weightedInputs();
+
 		double weightWith(String inputId);
 
 		double bias();
+
+	}
+
+	public interface WeightedInputBrowser extends InputBrowser {
+		double weight();
+	}
+
+	public interface InputsBrowser {
+
+		Object id();
+
+		Stream<InputBrowser> inputs();
+	}
+
+	public interface ClusterBrowser {
+
+		Object id();
+
+		Stream<NeuronBrowser> neurons();
+	}
+
+	public interface InputBrowser {
+
+		Object id();
 	}
 
 	public interface NeuralNetBrowser {
-		NeuronDescriptor neuron(String neuronId);
+		InputsBrowser inputsCluster();
 
-		public static NeuralNetBrowser forMlp(MLP mlp) {
+		Stream<ClusterBrowser> neuronsClusters();
+
+		NeuronBrowser neuron(String neuronId);
+
+		public static NeuralNetBrowser forMlp(MLP mlp, Supplier<String> inputIdSupplier,
+				Supplier<String> neuronIdSupplier, Supplier<String> layerIdSupplier) {
+
 			return new NeuralNetBrowser() {
+				private final String inputsLayerId = layerIdSupplier.get();
+				private final int inputsSize = mlp.layer(0).neuron(0).weights().size();
+				private final List<String> inputIds = Stream.generate(inputIdSupplier).limit(inputsSize).toList();
+				private final Map<Layer, ClusterBrowser> clusters = new LinkedHashMap<>();
+				private final Function<Layer, ClusterBrowser> clusterInitializer = layer -> {
+					String id = layerIdSupplier.get();
+					return new ClusterBrowser() {
+
+						@Override
+						public Object id() {
+							return id;
+						}
+
+						@Override
+						public Stream<NeuronBrowser> neurons() {
+							return indexRange(mlp, layer).stream().mapToObj(index -> "N" + index)
+									.map(neuronId -> neuron(neuronId));
+						}
+
+					};
+				};
 
 				@Override
-				public NeuronDescriptor neuron(String neuronId) {
+				public InputsBrowser inputsCluster() {
+					return new InputsBrowser() {
+
+						@Override
+						public Object id() {
+							return inputsLayerId;
+						}
+
+						@Override
+						public Stream<InputBrowser> inputs() {
+							return inputIds.stream().map(id -> {
+								return new InputBrowser() {
+
+									@Override
+									public Object id() {
+										return id;
+									}
+
+								};
+							});
+						}
+					};
+				}
+
+				@Override
+				public Stream<ClusterBrowser> neuronsClusters() {
+					return mlp.layers().stream().map(layer -> clusters.computeIfAbsent(layer, clusterInitializer));
+				}
+
+				@Override
+				public NeuronBrowser neuron(String neuronId) {
 					if (!neuronId.matches("N[0-9]+")) {
 						throw new IllegalArgumentException("Unrecognized neuron ID: " + neuronId);
 					}
@@ -539,7 +526,24 @@ public class NeuralNet {
 						throw new IllegalArgumentException("Neuron ID too large: " + neuronId);
 					}
 					Layer outLayer = retrieveLayer(neuronIndex);
-					return new NeuronDescriptor() {
+					return createNeuronBrowser(mlp, neuronId, neuron, outLayer);
+				}
+
+				private IndexRange indexRange(MLP mlp, Layer layer) {
+					int indexMin = mlp.layers().stream().takeWhile(previousLayer -> !previousLayer.equals(layer))
+							.mapToInt(previousLayer -> previousLayer.neurons().size()).sum();
+					int indexMax = indexMin + layer.neurons().size();
+					IndexRange indexRange = new IndexRange(indexMin, indexMax);
+					return indexRange;
+				}
+
+				private NeuronBrowser createNeuronBrowser(MLP mlp, String neuronId, Neuron neuron, Layer layer) {
+					return new NeuronBrowser() {
+
+						@Override
+						public Object id() {
+							return neuronId;
+						}
 
 						@Override
 						public double bias() {
@@ -547,8 +551,39 @@ public class NeuralNet {
 						}
 
 						@Override
+						public Stream<WeightedInputBrowser> weightedInputs() {
+							Layer layerBefore = mlp.layers().stream()//
+									.takeWhile(previousLayer -> !previousLayer.equals(layer))//
+									.reduce((_, nextLayer) -> nextLayer)//
+									.orElse(null);
+							IndexRange indexRange;
+							Function<Integer, String> idProvider;
+							if (layerBefore != null) {
+								indexRange = indexRange(mlp, layerBefore);
+								idProvider = index -> "N" + index;
+							} else {
+								// inputs case
+								int inputsCount = mlp.layer(0).neuron(0).weights().size();
+								indexRange = new IndexRange(0, inputsCount);
+								idProvider = index -> "I" + index;
+							}
+							return indexRange.stream().mapToObj(index -> new WeightedInputBrowser() {
+								
+								@Override
+								public Object id() {
+									return idProvider.apply(index);
+								}
+								
+								@Override
+								public double weight() {
+									return neuron.weights().get(index).data().get();
+								}
+							});
+						}
+
+						@Override
 						public double weightWith(String inputId) {
-							if (inputId.matches("I[0-9]+") && !outLayer.equals(mlp.layer(0))) {
+							if (inputId.matches("I[0-9]+") && !layer.equals(mlp.layer(0))) {
 								throw new IllegalArgumentException(
 										"Only neuron of first hidden layer can use input: " + inputId);
 							} else if (!inputId.matches("[IN][0-9]+")) {
@@ -565,7 +600,7 @@ public class NeuralNet {
 							} else if (inputType.equals("N")) {
 								int inputIndex = Integer.parseInt(inputId.substring(1));
 								Layer inLayer = retrieveLayer(inputIndex);
-								if (mlp.layers().indexOf(inLayer) != mlp.layers().indexOf(outLayer) - 1) {
+								if (mlp.layers().indexOf(inLayer) != mlp.layers().indexOf(layer) - 1) {
 									throw new IllegalArgumentException(inputId + " is not an input of " + neuronId);
 								}
 								Double weight = retrieveNeuronWeight(neuron, inputIndex);
@@ -628,6 +663,19 @@ public class NeuralNet {
 					return null;
 				}
 			};
+		}
+
+	}
+
+	record IndexRange(int min, int max) {
+		public IndexRange {
+			if (min > max) {
+				throw new IllegalArgumentException("Min " + min + " > max " + max);
+			}
+		}
+
+		IntStream stream() {
+			return IntStream.range(min, max);
 		}
 	}
 }

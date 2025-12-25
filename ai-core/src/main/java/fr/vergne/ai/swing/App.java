@@ -3,9 +3,11 @@ package fr.vergne.ai.swing;
 import static java.util.stream.Collectors.toMap;
 
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Paint;
 import java.awt.event.ActionEvent;
@@ -43,12 +45,14 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import javax.swing.AbstractAction;
+import javax.swing.ButtonGroup;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JRadioButton;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
@@ -92,6 +96,10 @@ import fr.vergne.ai.utils.LambdaUtils;
 
 @SuppressWarnings("serial")
 public class App extends JFrame {
+	// TODO Disable when the whole app can be initialized without preset data
+	// TODO Remove related code after disabling
+	private static final boolean FEATURE_FLAG_REQUIRE_DATA_ON_LAUNCH = true;
+
 	public App() {
 		// TODO Use from conf
 		Random random = new Random(0);
@@ -138,41 +146,33 @@ public class App extends JFrame {
 			Color clusterColor = Color.LIGHT_GRAY;
 			NeuralNetConf neuralNetConf = new NeuralNetConf(random, displayedDecimals, clusterColor);
 
-			conf = new Conf(trainConf, neuralNetConf, visualConf, lossPlotConf, timePlotConf);
+			DatasetConf datasetConf = new DatasetConf(random);
+
+			conf = new Conf(trainConf, datasetConf, neuralNetConf, visualConf, lossPlotConf, timePlotConf);
 		}
 
-		// TODO Create dataset panel
-		Supplier<Map<List<Double>, Double>> datasetSupplier;
-		{
-			Map<List<Double>, Double> dataset = switch (1) {
-			case 1 -> Dataset.circle(random);
-			case 2 -> Dataset.columns1(random);
-			case 3 -> Dataset.columns2(random);
-			case 4 -> Dataset.steepColumns(random);
-			case 5 -> Dataset.moons(random);
-			default -> throw new IllegalArgumentException("Unexpected dataset outputs");
-			};
-			datasetSupplier = () -> dataset;
-		}
-
+		Parts datasetParts = createDatasetPanel(conf.datasetConf());
 		Parts mlpParts = createMlpPanel(conf.neuralNetConf());
-		Parts visualParts = createVisual(conf.visualConf(), datasetSupplier, mlpParts.mlpSupplier());
+		Parts visualParts = createVisual(conf.visualConf(), datasetParts.datasetNotifier(), mlpParts.mlpSupplier());
 		Parts lossPlotParts = createLossPlot(conf.lossPlotConf());
 		Parts timePlotParts = createTimePlot(conf.timePlotConf());
 
 		JTabbedPane tabs = new JTabbedPane();
+		tabs.add(datasetParts.panel(), "Dataset");
 		tabs.add(mlpParts.panel(), "MLP");
 		tabs.add(visualParts.panel(), "Visual");
 		tabs.add(lossPlotParts.panel(), "Loss plot");
 		tabs.add(timePlotParts.panel(), "Time plot");
 
-		Consumer<List<RoundResult>> roundConsumer = mlpParts.panelUpdater()//
+		Consumer<List<RoundResult>> roundConsumer = datasetParts.panelUpdater()//
+				.andThen(mlpParts.panelUpdater())//
 				.andThen(visualParts.panelUpdater())//
 				.andThen(lossPlotParts.panelUpdater())//
 				.andThen(timePlotParts.panelUpdater())//
 		;
 
-		JPanel trainPanel = createTrainPanel(conf.trainConf(), roundConsumer, datasetSupplier, mlpParts.mlpSupplier());
+		JPanel trainPanel = createTrainPanel(conf.trainConf(), roundConsumer, datasetParts.datasetNotifier(),
+				mlpParts.mlpSupplier());
 
 		this.setLayout(new GridBagLayout());
 		GridBagConstraints constraints = new GridBagConstraints();
@@ -190,7 +190,58 @@ public class App extends JFrame {
 		this.setTitle("MLP");
 	}
 
+	private Parts createDatasetPanel(DatasetConf datasetConf) {
+		record Entry(String label, Supplier<Map<List<Double>, Double>> datasetNotifier) {
+		}
+		List<Entry> datasetCandidates = List.of(//
+				new Entry("Circle", () -> Dataset.circle(datasetConf.random())), //
+				new Entry("Columns 1", () -> Dataset.columns1(datasetConf.random())), //
+				new Entry("Columns 2", () -> Dataset.columns2(datasetConf.random())), //
+				new Entry("Columns steep", () -> Dataset.steepColumns(datasetConf.random())), //
+				new Entry("Moons", () -> Dataset.moons(datasetConf.random())), //
+				new Entry("Import", () -> {
+					// TODO Implement dataset import
+					throw new RuntimeException("Not implemented yet");
+				})//
+		);
+
+		JPanel panel = new JPanel(new GridBagLayout());
+		GridBagConstraints constraints = new GridBagConstraints();
+		constraints.gridx = 0;
+		constraints.gridy = GridBagConstraints.RELATIVE;
+		constraints.anchor = GridBagConstraints.LINE_START;
+
+		ButtonGroup group = new ButtonGroup();
+
+		DataNotifier<Map<List<Double>, Double>> datasetNotifier = new DataNotifier<>();
+		datasetCandidates.forEach(entry -> {
+			var label = entry.label();
+			var datasetSupplier = entry.datasetNotifier();
+
+			JRadioButton radioButton = new JRadioButton(label);
+			radioButton.addActionListener(_ -> {
+				datasetNotifier.update(datasetSupplier.get());
+			});
+
+			panel.add(radioButton, constraints);
+
+			group.add(radioButton);
+		});
+
+		// Auto select first option
+		// TODO Remove once other screens are able to init without it
+		((JRadioButton) panel.getComponent(0)).doClick();
+
+		Consumer<List<RoundResult>> updater = _ -> {
+			// Nothing to do with rounds results
+		};
+
+		return new Parts(panel, updater, null, datasetNotifier);
+	}
+
 	private Parts createMlpPanel(NeuralNetConf neuralNetConf) {
+		// TODO Notify other components of neural net update
+		// TODO Redraw neural net stuff on relevant components upon update
 		// TODO Support NeuralNet building
 		MLP mlp = switch (1) {
 		case 1 ->
@@ -278,7 +329,7 @@ public class App extends JFrame {
 		constraints.weighty = 0.0;
 		mlpPanel.add(exportPanel, constraints);
 
-		return new Parts(mlpPanel, mlpUpdater, () -> mlp);
+		return new Parts(mlpPanel, mlpUpdater, () -> mlp, null);
 	}
 
 	private JPanel createExportPanel(NeuralNetConf neuralNetConf, NeuralNetBrowser neuralNetBrowser) {
@@ -348,56 +399,75 @@ public class App extends JFrame {
 		return exportPanel;
 	}
 
-	private static Parts createVisual(VisualConf visualConf, Supplier<Map<List<Double>, Double>> datasetSupplier,
+	private static Parts createVisual(VisualConf visualConf, DataNotifier<Map<List<Double>, Double>> datasetNotifier,
 			Supplier<MLP> mlpSupplier) {
-		BiFunction<VisualDatasetConf, Integer, List<Double>> valuesExtractor = (datasetConf1, index) -> {
-			return datasetSupplier.get().entrySet().stream()//
-					.filter(entry -> datasetConf1.predicate().test(entry.getValue()))//
-					.map(Entry::getKey)//
-					.map(list -> list.get(index))//
-					.toList();
-		};
-		Function<VisualDatasetConf, SeriesDefinition> seriesFactory = datasetConf3 -> {
-			return new SeriesDefinition(//
-					valuesExtractor.apply(datasetConf3, visualConf.xIndex()), //
-					valuesExtractor.apply(datasetConf3, visualConf.yIndex()), //
-					datasetConf3.label());
-		};
-		Map<XYSeries, Color> coloredSeries = visualConf.datasetConfs().stream()//
-				.collect(toMap(//
-						datasetConf2 -> createSeries(seriesFactory.apply(datasetConf2)), //
-						datasetConf -> datasetConf.color()//
+		JPanel visualPanel = new JPanel(new GridLayout(1, 1));
+
+		// TODO Redraw dataset points on Visual upon update
+		DataNotifier.Listener<Map<List<Double>, Double>> datasetListener = new DataNotifier.Listener<>() {
+
+			@Override
+			public void updated(Map<List<Double>, Double> dataset) {
+				BiFunction<VisualDatasetConf, Integer, List<Double>> valuesExtractor = (datasetConf, index) -> {
+					return dataset.entrySet().stream()//
+							.filter(entry -> datasetConf.predicate().test(entry.getValue()))//
+							.map(Entry::getKey)//
+							.map(list -> list.get(index))//
+							.toList();
+				};
+				Function<VisualDatasetConf, SeriesDefinition> seriesFactory = datasetConf -> {
+					return new SeriesDefinition(//
+							valuesExtractor.apply(datasetConf, visualConf.xIndex()), //
+							valuesExtractor.apply(datasetConf, visualConf.yIndex()), //
+							datasetConf.label());
+				};
+				Map<XYSeries, Color> coloredSeries = visualConf.datasetConfs().stream()//
+						.collect(toMap(//
+								datasetConf -> createSeries(seriesFactory.apply(datasetConf)), //
+								datasetConf -> datasetConf.color()//
 				));
-		XYSeriesCollection chartDataset = new XYSeriesCollection();
-		coloredSeries.keySet().forEach(chartDataset::addSeries);
+				XYSeriesCollection chartDataset = new XYSeriesCollection();
+				coloredSeries.keySet().forEach(chartDataset::addSeries);
 
-		JFreeChart chart = ChartFactory.createScatterPlot("MLP", // Title
-				"x", // X-axis label
-				"y", // Y-axis label
-				chartDataset, // Dataset
-				PlotOrientation.VERTICAL, // Orientation
-				true, // Include legend
-				true, // Tooltips
-				false // URLs
-		);
+				JFreeChart chart = ChartFactory.createScatterPlot("MLP", // Title
+						"x", // X-axis label
+						"y", // Y-axis label
+						chartDataset, // Dataset
+						PlotOrientation.VERTICAL, // Orientation
+						true, // Include legend
+						true, // Tooltips
+						false // URLs
+				);
 
-		XYPlot plot = (XYPlot) chart.getPlot();
+				XYPlot plot = (XYPlot) chart.getPlot();
 
-		XYItemRenderer renderer = plot.getRenderer();
-		coloredSeries.forEach((series, color) -> {
-			int seriesIndex = chartDataset.getSeriesIndex(series.getKey());
-			renderer.setSeriesPaint(seriesIndex, color);
-		});
+				XYItemRenderer renderer = plot.getRenderer();
+				coloredSeries.forEach((series, color) -> {
+					int seriesIndex = chartDataset.getSeriesIndex(series.getKey());
+					renderer.setSeriesPaint(seriesIndex, color);
+				});
 
-		addContour(visualConf.contourConf(), visualConf, plot, mlpSupplier);
+				addContour(visualConf.contourConf(), visualConf, plot, mlpSupplier);
+
+				ChartPanel chartPanel = new ChartPanel(chart);
+
+				visualPanel.removeAll();
+				visualPanel.add(chartPanel);
+			}
+		};
+		if (FEATURE_FLAG_REQUIRE_DATA_ON_LAUNCH && datasetNotifier.get() != null) {
+			datasetListener.updated(datasetNotifier.get());
+		}
+		datasetNotifier.addListener(datasetListener);
 
 		Consumer<List<RoundResult>> visualUpdater = _ -> {
-			chart.fireChartChanged();
+			Component component = visualPanel.getComponent(0);
+			if (component instanceof ChartPanel chartPanel) {
+				chartPanel.getChart().fireChartChanged();
+			}
 		};
 
-		ChartPanel visualPanel = new ChartPanel(chart);
-
-		return new Parts(visualPanel, visualUpdater, null);
+		return new Parts(visualPanel, visualUpdater, null, null);
 	}
 
 	private static Parts createLossPlot(LossPlotConf lossPlotConf) {
@@ -432,7 +502,7 @@ public class App extends JFrame {
 
 		ChartPanel chartPanel = new ChartPanel(chart);
 
-		return new Parts(chartPanel, lossPlotUpdater, null);
+		return new Parts(chartPanel, lossPlotUpdater, null, null);
 	}
 
 	private static Parts createTimePlot(TimePlotConf timePlotConf) {
@@ -488,11 +558,11 @@ public class App extends JFrame {
 
 		ChartPanel chartPanel = new ChartPanel(chart);
 
-		return new Parts(chartPanel, lossPlotUpdater, null);
+		return new Parts(chartPanel, lossPlotUpdater, null, null);
 	}
 
 	private static JPanel createTrainPanel(TrainConf trainConf, Consumer<List<RoundResult>> roundsConsumer,
-			Supplier<Map<List<Double>, Double>> datasetSupplier, Supplier<MLP> mlpSupplier) {
+			DataNotifier<Map<List<Double>, Double>> datasetNotifier, Supplier<MLP> mlpSupplier) {
 		JTextField roundsLimitField = FieldBuilder.buildFieldFor(trainConf.roundsLimit())//
 				.intoText(src -> src.get().map(Object::toString).orElse(""))//
 				.as(Long::parseLong).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
@@ -523,7 +593,7 @@ public class App extends JFrame {
 
 		roundsConsumer = lossFieldUpdater.andThen(roundsConsumer);
 		JToggleButton trainButton = new JToggleButton(
-				createTrainAction(trainConf, roundsConsumer, datasetSupplier, mlpSupplier));
+				createTrainAction(trainConf, roundsConsumer, datasetNotifier, mlpSupplier));
 
 		JPanel trainPanel = new JPanel();
 		trainPanel.setLayout(new GridBagLayout());
@@ -812,7 +882,7 @@ public class App extends JFrame {
 	}
 
 	private static AbstractAction createTrainAction(TrainConf trainConf, Consumer<List<RoundResult>> roundsConsumer,
-			Supplier<Map<List<Double>, Double>> datasetSupplier, Supplier<MLP> mlpSupplier) {
+			DataNotifier<Map<List<Double>, Double>> datasetNotifier, Supplier<MLP> mlpSupplier) {
 		return new AbstractAction("Train") {
 			long round = 0;
 
@@ -861,7 +931,7 @@ public class App extends JFrame {
 							round++;
 							Function<MLP, RoundData> mlpRound = mlp2 -> {
 								Instant start = Instant.now();
-								Value loss = mlp2.computeLoss(datasetSupplier.get());
+								Value loss = mlp2.computeLoss(datasetNotifier.get());
 								Instant computeTime = Instant.now();
 								loss.backward();
 								Instant backwardTime = Instant.now();
@@ -1004,8 +1074,12 @@ public class App extends JFrame {
 	) {
 	}
 
+	record DatasetConf(Random random) {
+	}
+
 	record Conf(//
 			TrainConf trainConf, //
+			DatasetConf datasetConf, //
 			NeuralNetConf neuralNetConf, //
 			VisualConf visualConf, //
 			LossPlotConf lossPlotConf, //
@@ -1016,7 +1090,8 @@ public class App extends JFrame {
 	private record SeriesDefinition(List<Double> xs, List<Double> ys, String lineTitle) {
 	}
 
-	private record Parts(JPanel panel, Consumer<List<RoundResult>> panelUpdater, Supplier<MLP> mlpSupplier) {
+	private record Parts(JPanel panel, Consumer<List<RoundResult>> panelUpdater, Supplier<MLP> mlpSupplier,
+			DataNotifier<Map<List<Double>, Double>> datasetNotifier) {
 	}
 
 	record TrainConf(//
@@ -1024,5 +1099,32 @@ public class App extends JFrame {
 			AtomicLong batchSize, //
 			AtomicReference<Double> updateStep//
 	) {
+	}
+
+	class DataNotifier<T> {
+		private final List<DataNotifier.Listener<T>> listeners = new LinkedList<>();
+		private T data = null;
+
+		T get() {
+			if (FEATURE_FLAG_REQUIRE_DATA_ON_LAUNCH) {
+				return data;
+			} else {
+				// TODO Remove the method and field?
+				throw new RuntimeException("Not implemented");
+			}
+		}
+
+		void addListener(DataNotifier.Listener<T> listener) {
+			listeners.add(listener);
+		}
+
+		void update(T newData) {
+			this.data = newData;
+			this.listeners.forEach(listener -> listener.updated(newData));
+		}
+
+		interface Listener<T> {
+			void updated(T newData);
+		}
 	}
 }

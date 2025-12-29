@@ -149,7 +149,8 @@ public class App extends JFrame {
 
 		Parts datasetParts = createDatasetPanel(state.datasetState());
 		Parts mlpParts = createMlpPanel(state.neuralNetState());
-		Parts visualParts = createVisual(state.visualState(), datasetParts.datasetNotifier(), mlpParts.mlpNotifier());
+		Parts visualParts = createVisual(state.visualState(), datasetParts.trainDatasetNotifier(),
+				mlpParts.mlpNotifier());
 		Parts lossPlotParts = createLossPlot(state.lossPlotState());
 		Parts timePlotParts = createTimePlot(state.timePlotState());
 
@@ -167,8 +168,8 @@ public class App extends JFrame {
 				.andThen(timePlotParts.panelUpdater())//
 		;
 
-		JPanel trainPanel = createTrainPanel(state.trainState(), roundConsumer, datasetParts.datasetNotifier(),
-				mlpParts.mlpNotifier());
+		JPanel trainPanel = createTrainPanel(state.trainState(), roundConsumer, datasetParts.trainDatasetNotifier(),
+				datasetParts.testDatasetNotifier(), mlpParts.mlpNotifier());
 
 		this.setLayout(new GridBagLayout());
 		GridBagConstraints constraints = new GridBagConstraints();
@@ -187,7 +188,11 @@ public class App extends JFrame {
 	}
 
 	private Parts createDatasetPanel(DatasetState datasetState) {
-		record Entry(String label, Supplier<Map<List<Double>, Double>> datasetSupplier) {
+		record Entry(String label, Supplier<Map<List<Double>, Double>> trainDatasetSupplier,
+				Supplier<Map<List<Double>, Double>> testDatasetSupplier) {
+			public Entry(String label, Supplier<Map<List<Double>, Double>> datasetSupplier) {
+				this(label, datasetSupplier, datasetSupplier);
+			}
 		}
 		List<Entry> datasetCandidates = List.of(//
 				new Entry("Circle", () -> Dataset.circle(datasetState.random())), //
@@ -206,14 +211,17 @@ public class App extends JFrame {
 
 		ButtonGroup group = new ButtonGroup();
 
-		DataNotifier<Map<List<Double>, Double>> datasetNotifier = new DataNotifier<>();
+		DataNotifier<Map<List<Double>, Double>> trainDatasetNotifier = new DataNotifier<>();
+		DataNotifier<Map<List<Double>, Double>> testDatasetNotifier = new DataNotifier<>();
 		datasetCandidates.forEach(entry -> {
 			var label = entry.label();
-			var datasetSupplier = entry.datasetSupplier();
+			var trainDatasetSupplier = entry.trainDatasetSupplier();
+			var testDatasetSupplier = entry.testDatasetSupplier();
 
 			JRadioButton radioButton = new JRadioButton(label);
 			radioButton.addActionListener(_ -> {
-				datasetNotifier.update(datasetSupplier.get());
+				trainDatasetNotifier.update(trainDatasetSupplier.get());
+				testDatasetNotifier.update(testDatasetSupplier.get());
 			});
 
 			panel.add(radioButton, constraints);
@@ -225,7 +233,7 @@ public class App extends JFrame {
 			// Nothing to do with rounds results
 		};
 
-		return new Parts(panel, updater, null, datasetNotifier);
+		return new Parts(panel, updater, null, trainDatasetNotifier, testDatasetNotifier);
 	}
 
 	private Parts createMlpPanel(NeuralNetState neuralNetState) {
@@ -341,7 +349,7 @@ public class App extends JFrame {
 		constraints.weighty = 0.0;
 		mlpPanel.add(exportPanel, constraints);
 
-		return new Parts(mlpPanel, mlpUpdater, mlpNotifier, null);
+		return new Parts(mlpPanel, mlpUpdater, mlpNotifier, null, null);
 	}
 
 	private JPanel createExportPanel(NeuralNetState neuralNetState,
@@ -489,19 +497,21 @@ public class App extends JFrame {
 			}
 		};
 
-		return new Parts(visualPanel, visualUpdater, null, null);
+		return new Parts(visualPanel, visualUpdater, null, null, null);
 	}
 
 	private static Parts createLossPlot(LossPlotState lossPlotState) {
 		XYSeriesCollection chartDataset = new XYSeriesCollection();
-		XYSeries chartSeries = new XYSeries("Loss");
-		chartDataset.addSeries(chartSeries);
+		XYSeries lossSeries = new XYSeries("Loss");
+		XYSeries testSeries = new XYSeries("Test");
+		chartDataset.addSeries(lossSeries);
+		chartDataset.addSeries(testSeries);
 		JFreeChart chart = ChartFactory.createXYLineChart(null, // Title
 				"Rounds", // X-axis
-				"Loss", // Y-axis
+				null, // Y-axis
 				chartDataset, // Dataset
 				PlotOrientation.VERTICAL, // Orientation
-				false, // Include legend
+				true, // Include legend
 				true, // Tooltips
 				false // URLs
 		);
@@ -511,28 +521,32 @@ public class App extends JFrame {
 		ValueAxis initialAxis = xyPlot.getRangeAxis();
 		xyPlot.setRangeAxis(new LogarithmicAxis(initialAxis.getLabel()));
 
-		PlotUtils.Window<Long, Double> window = lossPlotState.windowFactory()
-				.createLongDoubleWindow((round, loss) -> chartSeries.add(round, loss));
+		PlotUtils.Window<Long, Double> lossWindow = lossPlotState.windowFactory()
+				.createLongDoubleWindow((round, loss) -> lossSeries.add(round, loss));
+		PlotUtils.Window<Long, Double> testWindow = lossPlotState.windowFactory()
+				.createLongDoubleWindow((round, test) -> testSeries.add(round, test));
 		Consumer<List<RoundResult>> lossPlotUpdater = roundResults -> {
 			roundResults.forEach(roundResult -> {
 				long round = roundResult.round();
-				double loss = roundResult.data().loss().data().get();
-				window.feedWindow(round, loss);
+				lossWindow.feedWindow(round, roundResult.data().loss());
+				testWindow.feedWindow(round, roundResult.data().test());
 			});
 			chart.fireChartChanged();
 		};
 
 		ChartPanel chartPanel = new ChartPanel(chart);
 
-		return new Parts(chartPanel, lossPlotUpdater, null, null);
+		return new Parts(chartPanel, lossPlotUpdater, null, null, null);
 	}
 
 	private static Parts createTimePlot(TimePlotState timePlotState) {
 		XYSeriesCollection chartDataset = new XYSeriesCollection();
 		XYSeries computeSeries = new XYSeries("Compute");
+		XYSeries testSeries = new XYSeries("Test");
 		XYSeries backwardSeries = new XYSeries("Backward");
 		XYSeries updateSeries = new XYSeries("Update");
 		chartDataset.addSeries(computeSeries);
+		chartDataset.addSeries(testSeries);
 		chartDataset.addSeries(backwardSeries);
 		chartDataset.addSeries(updateSeries);
 		JFreeChart chart = ChartFactory.createXYLineChart(null, // Title
@@ -557,6 +571,8 @@ public class App extends JFrame {
 
 		PlotUtils.Window<Long, Long> computeWindow = windowFactory
 				.createLongLongWindow((round, nanos) -> computeSeries.add(round, nanos));
+		PlotUtils.Window<Long, Long> testWindow = windowFactory
+				.createLongLongWindow((round, nanos) -> testSeries.add(round, nanos));
 		PlotUtils.Window<Long, Long> backwardWindow = windowFactory
 				.createLongLongWindow((round, nanos) -> backwardSeries.add(round, nanos));
 		PlotUtils.Window<Long, Long> updateWindow = windowFactory
@@ -572,6 +588,7 @@ public class App extends JFrame {
 			roundResults.forEach(roundResult -> {
 				var seriesUpdater = seriesUpdaterFactory.apply(roundResult);
 				seriesUpdater.accept(computeWindow, RoundData::computeDuration);
+				seriesUpdater.accept(testWindow, RoundData::testDuration);
 				seriesUpdater.accept(backwardWindow, RoundData::backwardDuration);
 				seriesUpdater.accept(updateWindow, RoundData::updateDuration);
 			});
@@ -580,11 +597,12 @@ public class App extends JFrame {
 
 		ChartPanel chartPanel = new ChartPanel(chart);
 
-		return new Parts(chartPanel, lossPlotUpdater, null, null);
+		return new Parts(chartPanel, lossPlotUpdater, null, null, null);
 	}
 
 	private static JPanel createTrainPanel(TrainState trainState, Consumer<List<RoundResult>> roundsConsumer,
-			DataNotifier<Map<List<Double>, Double>> datasetNotifier, DataNotifier<MLP> mlpNotifier) {
+			DataNotifier<Map<List<Double>, Double>> trainDatasetNotifier,
+			DataNotifier<Map<List<Double>, Double>> testDatasetNotifier, DataNotifier<MLP> mlpNotifier) {
 		JTextField roundsLimitField = FieldBuilder.buildFieldFor(trainState.roundsLimit())//
 				.intoText(src -> src.get().map(Object::toString).orElse(""))//
 				.as(Long::parseLong).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
@@ -609,13 +627,13 @@ public class App extends JFrame {
 		Consumer<List<RoundResult>> lossFieldUpdater = roundResults -> {
 			roundResults.forEach(roundResult -> {
 				roundField.setText(Long.toString(roundResult.round()));
-				lossField.setText(roundResult.data().loss().data().get().toString());
+				lossField.setText(Double.toString(roundResult.data().loss()));
 			});
 		};
 
 		roundsConsumer = lossFieldUpdater.andThen(roundsConsumer);
 		JToggleButton trainButton = new JToggleButton(
-				createTrainAction(trainState, roundsConsumer, datasetNotifier, mlpNotifier));
+				createTrainAction(trainState, roundsConsumer, trainDatasetNotifier, testDatasetNotifier, mlpNotifier));
 
 		JPanel trainPanel = new JPanel();
 		trainPanel.setLayout(new GridBagLayout());
@@ -905,15 +923,18 @@ public class App extends JFrame {
 	}
 
 	private static AbstractAction createTrainAction(TrainState trainState, Consumer<List<RoundResult>> roundsConsumer,
-			DataNotifier<Map<List<Double>, Double>> datasetNotifier, DataNotifier<MLP> mlpNotifier) {
+			DataNotifier<Map<List<Double>, Double>> trainDatasetNotifier,
+			DataNotifier<Map<List<Double>, Double>> testDatasetNotifier, DataNotifier<MLP> mlpNotifier) {
 
 		var ctx = new Object() {
-			Map<List<Double>, Double> dataset = null;
+			Map<List<Double>, Double> trainDataset = null;
+			Map<List<Double>, Double> testDataset = null;
 			MLP mlp = null;
 		};
 
 		// Update data upon notification
-		datasetNotifier.addListener(dataset -> ctx.dataset = dataset);
+		trainDatasetNotifier.addListener(dataset -> ctx.trainDataset = dataset);
+		testDatasetNotifier.addListener(dataset -> ctx.testDataset = dataset);
 		mlpNotifier.addListener(mlp -> ctx.mlp = mlp);
 
 		return new AbstractAction("Train") {
@@ -962,19 +983,24 @@ public class App extends JFrame {
 						private void computeRound() {
 							batchedRound++;
 							round++;
-							Map<List<Double>, Double> dataset = ctx.dataset;
 							MLP mlp = ctx.mlp;
+							Map<List<Double>, Double> trainDataset = ctx.trainDataset;
+							Map<List<Double>, Double> testDataset = ctx.testDataset;
 							Instant startInstant = Instant.now();
-							Value loss = mlp.computeLoss(dataset);
+							Value loss = mlp.computeLoss(trainDataset);
 							Instant computedInstant = Instant.now();
+							Value test = mlp.computeLoss(testDataset);
+							Instant testedInstant = Instant.now();
 							loss.backward();
 							Instant backwardedInstant = Instant.now();
 							mlp.updateParameters(trainState.updateStep().get());
 							Instant updatedInstant = Instant.now();
 							RoundData data = new RoundData(//
-									loss, //
+									loss.data().get(), //
+									test.data().get(), //
 									Duration.between(startInstant, computedInstant), //
-									Duration.between(computedInstant, backwardedInstant), //
+									Duration.between(computedInstant, testedInstant), //
+									Duration.between(testedInstant, backwardedInstant), //
 									Duration.between(backwardedInstant, updatedInstant)//
 							);
 							results.add(new RoundResult(round, data));
@@ -1062,7 +1088,8 @@ public class App extends JFrame {
 		}
 	}
 
-	record RoundData(Value loss, Duration computeDuration, Duration backwardDuration, Duration updateDuration) {
+	record RoundData(double loss, double test, Duration computeDuration, Duration testDuration,
+			Duration backwardDuration, Duration updateDuration) {
 	}
 
 	record RoundResult(long round, RoundData data) {
@@ -1122,7 +1149,8 @@ public class App extends JFrame {
 	}
 
 	private record Parts(JPanel panel, Consumer<List<RoundResult>> panelUpdater, DataNotifier<MLP> mlpNotifier,
-			DataNotifier<Map<List<Double>, Double>> datasetNotifier) {
+			DataNotifier<Map<List<Double>, Double>> trainDatasetNotifier,
+			DataNotifier<Map<List<Double>, Double>> testDatasetNotifier) {
 	}
 
 	record TrainState(//

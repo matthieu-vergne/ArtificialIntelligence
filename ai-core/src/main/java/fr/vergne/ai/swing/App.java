@@ -502,9 +502,9 @@ public class App extends JFrame {
 
 	private static Parts createLossPlot(LossPlotState lossPlotState) {
 		XYSeriesCollection chartDataset = new XYSeriesCollection();
-		XYSeries lossSeries = new XYSeries("Loss");
+		XYSeries trainSeries = new XYSeries("Train");
 		XYSeries testSeries = new XYSeries("Test");
-		chartDataset.addSeries(lossSeries);
+		chartDataset.addSeries(trainSeries);
 		chartDataset.addSeries(testSeries);
 		JFreeChart chart = ChartFactory.createXYLineChart(null, // Title
 				"Rounds", // X-axis
@@ -521,15 +521,15 @@ public class App extends JFrame {
 		ValueAxis initialAxis = xyPlot.getRangeAxis();
 		xyPlot.setRangeAxis(new LogarithmicAxis(initialAxis.getLabel()));
 
-		PlotUtils.Window<Long, Double> lossWindow = lossPlotState.windowFactory()
-				.createLongDoubleWindow((round, loss) -> lossSeries.add(round, loss));
+		PlotUtils.Window<Long, Double> trainWindow = lossPlotState.windowFactory()
+				.createLongDoubleWindow((round, loss) -> trainSeries.add(round, loss));
 		PlotUtils.Window<Long, Double> testWindow = lossPlotState.windowFactory()
-				.createLongDoubleWindow((round, test) -> testSeries.add(round, test));
+				.createLongDoubleWindow((round, loss) -> testSeries.add(round, loss));
 		Consumer<List<RoundResult>> lossPlotUpdater = roundResults -> {
 			roundResults.forEach(roundResult -> {
 				long round = roundResult.round();
-				lossWindow.feedWindow(round, roundResult.data().loss());
-				testWindow.feedWindow(round, roundResult.data().test());
+				trainWindow.feedWindow(round, roundResult.data().trainLoss());
+				testWindow.feedWindow(round, roundResult.data().testLoss());
 			});
 			chart.fireChartChanged();
 		};
@@ -622,12 +622,14 @@ public class App extends JFrame {
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
-		JTextField roundField = new JTextField();
-		JTextField lossField = new JTextField();
+		JLabel roundLabel = new JLabel();
+		JLabel trainLossLabel = new JLabel();
+		JLabel testLossLabel = new JLabel();
 		Consumer<List<RoundResult>> lossFieldUpdater = roundResults -> {
 			roundResults.forEach(roundResult -> {
-				roundField.setText(Long.toString(roundResult.round()));
-				lossField.setText(Double.toString(roundResult.data().loss()));
+				roundLabel.setText(Long.toString(roundResult.round()));
+				trainLossLabel.setText(scientificFormat(roundResult.data().trainLoss()));
+				testLossLabel.setText(scientificFormat(roundResult.data().testLoss()));
 			});
 		};
 
@@ -657,15 +659,20 @@ public class App extends JFrame {
 			constraints.weightx = 1.0;
 			trainPanel.add(updateStepField, constraints);
 			constraints.weightx = 0.0;
-			trainPanel.add(new JLabel("|"), constraints);
+			/////////////////
+			constraints.gridy++;
 			constraints.weightx = 0.0;
-			trainPanel.add(new JLabel("Round:"), constraints);
+			trainPanel.add(new JLabel("Round:", JLabel.TRAILING), constraints);
 			constraints.weightx = 1.0;
-			trainPanel.add(roundField, constraints);
+			trainPanel.add(roundLabel, constraints);
 			constraints.weightx = 0.0;
-			trainPanel.add(new JLabel("Loss:"), constraints);
-			constraints.weightx = 3.0;// Bigger because usually more digits
-			trainPanel.add(lossField, constraints);
+			trainPanel.add(new JLabel("Train loss:", JLabel.TRAILING), constraints);
+			constraints.weightx = 1.0;
+			trainPanel.add(trainLossLabel, constraints);
+			constraints.weightx = 0.0;
+			trainPanel.add(new JLabel("Test loss:", JLabel.TRAILING), constraints);
+			constraints.weightx = 1.0;
+			trainPanel.add(testLossLabel, constraints);
 		}
 		return trainPanel;
 	}
@@ -987,17 +994,17 @@ public class App extends JFrame {
 							Map<List<Double>, Double> trainDataset = ctx.trainDataset;
 							Map<List<Double>, Double> testDataset = ctx.testDataset;
 							Instant startInstant = Instant.now();
-							Value loss = mlp.computeLoss(trainDataset);
+							Value trainLoss = mlp.computeLoss(trainDataset);
 							Instant computedInstant = Instant.now();
-							Value test = mlp.computeLoss(testDataset);
+							Value testLoss = mlp.computeLoss(testDataset);
 							Instant testedInstant = Instant.now();
-							loss.backward();
+							trainLoss.backward();
 							Instant backwardedInstant = Instant.now();
 							mlp.updateParameters(trainState.updateStep().get());
 							Instant updatedInstant = Instant.now();
 							RoundData data = new RoundData(//
-									loss.data().get(), //
-									test.data().get(), //
+									trainLoss.data().get(), //
+									testLoss.data().get(), //
 									Duration.between(startInstant, computedInstant), //
 									Duration.between(computedInstant, testedInstant), //
 									Duration.between(testedInstant, backwardedInstant), //
@@ -1088,7 +1095,7 @@ public class App extends JFrame {
 		}
 	}
 
-	record RoundData(double loss, double test, Duration computeDuration, Duration testDuration,
+	record RoundData(double trainLoss, double testLoss, Duration computeDuration, Duration testDuration,
 			Duration backwardDuration, Duration updateDuration) {
 	}
 
@@ -1174,5 +1181,9 @@ public class App extends JFrame {
 		interface Listener<T> {
 			void updated(T newData);
 		}
+	}
+
+	private static String scientificFormat(double value) {
+		return String.format("%.2e", value);
 	}
 }

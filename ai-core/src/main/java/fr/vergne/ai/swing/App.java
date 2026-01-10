@@ -195,11 +195,11 @@ public class App extends JFrame {
 			}
 		}
 		List<Entry> datasetCandidates = List.of(//
-				new Entry("Circle", () -> Dataset.circle(datasetState.random())), //
-				new Entry("Columns 1", () -> Dataset.columns1(datasetState.random())), //
-				new Entry("Columns 2", () -> Dataset.columns2(datasetState.random())), //
-				new Entry("Columns steep", () -> Dataset.steepColumns(datasetState.random())), //
-				new Entry("Moons", () -> Dataset.moons(datasetState.random()))//
+				new Entry("Circle", () -> Dataset.circle(datasetState.random(), 100)), //
+				new Entry("Columns 1", () -> Dataset.columns1(datasetState.random(), 100)), //
+				new Entry("Columns 2", () -> Dataset.columns2(datasetState.random(), 100)), //
+				new Entry("Columns steep", () -> Dataset.steepColumns(datasetState.random(), 100)), //
+				new Entry("Moons", () -> Dataset.moons(datasetState.random(), 100, 0.1))//
 		);
 		// TODO Implement dataset import (add to candidates + autoload)
 
@@ -253,7 +253,7 @@ public class App extends JFrame {
 				new Entry("4x4x4x4x1", () -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1),
 						(_) -> neuralNetState.random().nextDouble(-1.0, 1.0)))//
 		);
-		// TODO Implement MLP import (add to candidates + autoload)
+		// TODO Implement MLP import (add to candidates + autoload) (ONNX?)
 		// TODO Implement MLP building
 
 		var ctx = new Object() {

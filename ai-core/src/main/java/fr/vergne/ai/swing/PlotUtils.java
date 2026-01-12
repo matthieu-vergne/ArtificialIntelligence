@@ -94,9 +94,10 @@ public interface PlotUtils {
 
 					@Override
 					public void feedWindow(Long x, Long y) {
-						int windowIndex = (int) (x % windowSize);
+						// Assume x in [1;max[
+						int windowIndex = (int) ((x - 1) % windowSize);
 						window[windowIndex] = y;
-						long average = (long) Arrays.stream(window).average().getAsDouble();
+						long average = (long) Arrays.stream(window).limit(x).average().getAsDouble();
 						consumer.accept(x, average);
 					}
 				};
@@ -109,9 +110,10 @@ public interface PlotUtils {
 
 					@Override
 					public void feedWindow(Long x, Double y) {
-						int windowIndex = (int) (x % windowSize);
+						// Assume x in [1;max[
+						int windowIndex = (int) ((x - 1) % windowSize);
 						window[windowIndex] = y;
-						double average = Arrays.stream(window).average().getAsDouble();
+						double average = Arrays.stream(window).limit(x).average().getAsDouble();
 						consumer.accept(x, average);
 					}
 				};

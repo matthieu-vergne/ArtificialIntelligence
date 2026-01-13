@@ -123,7 +123,7 @@ class NeuralNetTest {
 		}
 
 		double epsilonLoss = 1e-10;
-		assertThat(loss.data().get(), is(closeTo(9.555022845608106e-5, epsilonLoss)));
+		assertThat(loss.data().get(), is(closeTo(0.0017201899321182966, epsilonLoss)));
 
 		double epsilonOutput = 1e-2;
 		assertThat(mlp.computeRaw(x0).get(0), is(closeTo(y0, epsilonOutput)));

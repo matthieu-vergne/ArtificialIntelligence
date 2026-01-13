@@ -2,42 +2,65 @@ package fr.vergne.ai.neuralnet;
 
 import static java.util.stream.Collectors.toMap;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
+import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
 import java.util.function.BinaryOperator;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
-import javax.swing.JFrame;
-
-import fr.vergne.ai.swing.App;
-
 public class NeuralNet {
+
+	public static void main(String[] args) {
+		// Massive computation to stress performance & resilience
+		Random random = new Random(0);
+		List<Integer> layerSizes = new LinkedList<Integer>();
+		// Create 100^100 neurons
+		for (int i = 0; i < 100; i++) {
+			layerSizes.add(100);
+		}
+		MLP mlp = new MLP(ParameterNamer.create(), 2, layerSizes, (_) -> random.nextDouble(-1.0, 1.0));
+		Instant start = Instant.now();
+		Value loss = mlp.computeLoss(Map.of(List.of(123.0, 321.0), 1.0));
+		Instant end = Instant.now();
+		System.out.println(loss + " in " + Duration.between(start, end));
+
+		Instant start2 = Instant.now();
+		loss.backward();
+		Instant end2 = Instant.now();
+		System.out.println("backward in " + Duration.between(start2, end2));
+	}
 
 	public enum Operator {
 		NONE(null, //
 				(_) -> {
 					throw new RuntimeException("Should not be called");
 				}, //
-				(_, operands) ->
-
-				{
+				(operands) -> {
 					restrict(operands, 0);// Nothing to resolve
+					return Collections.emptyList();
 				}//
 		), //
 
 		PLUS("+", //
 				(operands) -> operands.stream().mapToDouble(d -> d).sum(), //
-				(parentGradient, operands) -> {
-					operands.forEach(operand -> operand.computeGradientsRecursivelyStartingHereAt(parentGradient));
+				(operands) -> {
+					return operands.stream().map(operand -> new GradiatedValue(operand, 1.0)).toList();
 				}//
 		), //
 		MINUS("-", //
@@ -45,18 +68,22 @@ public class NeuralNet {
 					restrict(operands, 2);
 					return operands.get(0) - operands.get(1);
 				}, //
-				(parentGradient, operands) -> {
-					operands.forEach(operand -> operand.computeGradientsRecursivelyStartingHereAt(parentGradient));
+				(operands) -> {
+					return operands.stream().map(operand -> new GradiatedValue(operand, 1.0)).toList();
 				}//
 		), //
 		MULT("*", //
 				(operands) -> operands.stream().mapToDouble(d -> d).reduce((a, b) -> a * b).getAsDouble(), //
-				(parentGradient, operands) -> {
+				(operands) -> {
 					restrict(operands, 2);
+
 					Value op1 = operands.get(0);
 					Value op2 = operands.get(1);
-					op1.computeGradientsRecursivelyStartingHereAt(parentGradient * op2.data().get());
-					op2.computeGradientsRecursivelyStartingHereAt(parentGradient * op1.data().get());
+
+					Double localGradient1 = op2.data().get();
+					Double localGradient2 = op1.data().get();
+
+					return List.of(new GradiatedValue(op1, localGradient1), new GradiatedValue(op2, localGradient2));
 				}//
 		), //
 		POW("^", //
@@ -64,12 +91,18 @@ public class NeuralNet {
 					restrict(operands, 2);
 					return Math.pow(operands.get(0), operands.get(1));
 				}, //
-				(parentGradient, operands) -> {
+				(operands) -> {
 					restrict(operands, 2);
-					Double v1 = operands.get(0).data().get();
-					Double v2 = operands.get(1).data().get();
-					double gradient = v2 * Math.pow(v1, v2 - 1);
-					operands.get(0).computeGradientsRecursivelyStartingHereAt(parentGradient * gradient);
+
+					Value op1 = operands.get(0);
+					Value op2 = operands.get(1);
+
+					Double v1 = op1.data().get();
+					Double v2 = op2.data().get();
+
+					double localGradient1 = v2 * Math.pow(v1, v2 - 1);
+
+					return List.of(new GradiatedValue(op1, localGradient1));
 				}//
 		), //
 		EXP("exp", //
@@ -77,10 +110,14 @@ public class NeuralNet {
 					restrict(operands, 1);
 					return Math.exp(operands.get(0));
 				}, //
-				(parentGradient, operands) -> {
+				(operands) -> {
 					restrict(operands, 1);
-					double gradient = Math.exp(operands.get(0).data().get());
-					operands.get(0).computeGradientsRecursivelyStartingHereAt(parentGradient * gradient);
+
+					Value op = operands.get(0);
+					Double v = op.data().get();
+					double localGradient = Math.exp(v);
+
+					return List.of(new GradiatedValue(op, localGradient));
 				}//
 		), //
 		TANH("tanh", //
@@ -88,20 +125,24 @@ public class NeuralNet {
 					restrict(operands, 1);
 					return Math.tanh(operands.get(0));
 				}, //
-				(parentGradient, operands) -> {
+				(operands) -> {
 					restrict(operands, 1);
-					double tanh = Math.tanh(operands.get(0).data().get());
-					double gradient = 1 - tanh * tanh;
-					operands.get(0).computeGradientsRecursivelyStartingHereAt(parentGradient * gradient);
+
+					Value op = operands.get(0);
+					// TODO Receive value to not recompute
+					double tanh = Math.tanh(op.data().get());
+					double localGradient = 1 - tanh * tanh;
+
+					return List.of(new GradiatedValue(op, localGradient));
 				}//
 		);
 
 		private final String label;
 		private final Function<List<Double>, Double> computer;
-		private final BiConsumer<Double, List<Value>> gradientResolver;
+		private final Function<List<Value>, List<GradiatedValue>> gradientResolver;
 
 		Operator(String label, Function<List<Double>, Double> computer,
-				BiConsumer<Double, List<Value>> gradientResolver) {
+				Function<List<Value>, List<GradiatedValue>> gradientResolver) {
 			this.label = label;
 			this.computer = computer;
 			this.gradientResolver = gradientResolver;
@@ -111,8 +152,8 @@ public class NeuralNet {
 			return computer.apply(operands);
 		}
 
-		public void resolveGradients(double grad, List<Value> operands) {
-			gradientResolver.accept(grad, operands);
+		public List<GradiatedValue> resolveGradients(List<Value> operands) {
+			return gradientResolver.apply(operands);
 		}
 
 		@Override
@@ -123,6 +164,13 @@ public class NeuralNet {
 
 	public static record Value(String label, AtomicReference<Double> data, Operator operator, List<Value> operands,
 			AtomicReference<Double> gradient) {
+
+		@Override
+		public final int hashCode() {
+			// Optimize hashcode computation by replacing operands by their labels
+			// It removes recursive computation over a whole network
+			return Objects.hash(label, data, operator, operands.stream().map(Value::label).toList(), gradient);
+		}
 
 		public Value(String label, double data) {
 			this(label, new AtomicReference<>(data), Operator.NONE, Collections.emptyList(), new AtomicReference<>());
@@ -161,13 +209,27 @@ public class NeuralNet {
 		}
 
 		public void resetGradientsRecursively() {
-			setGradient(0.0);
-			operands.forEach(Value::resetGradientsRecursively);
+			browseTowardsInput(value -> value.setGradient(0.0));
 		}
 
-		public void computeGradientsRecursivelyStartingHereAt(double gradient) {
-			addGradient(gradient);
-			operator.resolveGradients(gradient, operands);
+		private void browseTowardsInput(Consumer<Value> consumer) {
+			Set<Value> done = new HashSet<>();
+			List<Value> todo = List.of(this);
+			int count = 0;// TODO Remove
+			while (!todo.isEmpty()) {
+				List<Value> next = new LinkedList<>();
+				for (Value value : todo) {
+					if (done.add(value)) {
+						consumer.accept(value);
+						count++;
+						if (count % 10000 == 0) {
+							System.out.print(count + "\r");
+						}
+						next.addAll(value.operands());
+					}
+				}
+				todo = next;
+			}
 		}
 
 		public Value plus(Value that) {
@@ -240,7 +302,28 @@ public class NeuralNet {
 
 		public void backward() {
 			resetGradientsRecursively();
-			computeGradientsRecursivelyStartingHereAt(1.0);
+
+			Map<Value, Double> todo = Map.of(this, 1.0);
+			int count = 0;
+			while (!todo.isEmpty()) {
+				Map<Value, Double> next = new HashMap<>();
+				for (Entry<Value, Double> gradiatedValue : todo.entrySet()) {
+					Value parentValue = gradiatedValue.getKey();
+					double parentGradient = gradiatedValue.getValue();
+					parentValue.addGradient(parentGradient);
+					Operator parentOperator = parentValue.operator();
+					List<Value> parentOperands = parentValue.operands();
+					for (GradiatedValue gradiatedParentOperand : parentOperator.resolveGradients(parentOperands)) {
+						Value parentOperand = gradiatedParentOperand.value();
+						double localGradient = gradiatedParentOperand.gradient();
+						double operandGradient = parentGradient * localGradient;
+						next.compute(parentOperand, (_, v) -> (v == null ? 0 : v) + operandGradient);
+					}
+				}
+				todo = next;
+				count++;
+				System.out.println(count + " = " + next.size());
+			}
 		}
 	}
 
@@ -319,8 +402,10 @@ public class NeuralNet {
 		}
 
 		public List<Double> computeRaw(List<Double> x) {
-			return compute(x.stream().map(Value::of).toList()).stream().map(Value::data).map(AtomicReference::get)
-					.toList();
+			List<Value> xValues = x.stream().map(Value::of).toList();
+			List<Value> resultValues = compute(xValues);
+			List<Double> resultRaw = resultValues.stream().map(Value::data).map(AtomicReference::get).toList();
+			return resultRaw;
 		}
 
 		public List<Value> parameters() {
@@ -333,12 +418,19 @@ public class NeuralNet {
 					datapoint -> datapoint.getValue()//
 			));
 			Value loss = Value.of(0);
+
+			// Sum individual losses
 			for (Entry<Value, Double> entry : results.entrySet()) {
 				Value prediction = entry.getKey();
 				Double target = entry.getValue();
 				Value localLoss = prediction.minus(target).pow(2);
 				loss = loss.plus(localLoss);
 			}
+
+			// Normalize over dataset size
+			// Keep comparable loss for batching, testing, etc.
+			loss = loss.div(results.size());
+
 			return loss;
 		}
 
@@ -348,14 +440,6 @@ public class NeuralNet {
 			}
 		}
 
-	}
-
-	public static void main(String[] args) {
-		App app = new App();
-		app.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-		app.pack();
-		app.setSize(840, 930);
-		app.setVisible(true);
 	}
 
 	static double polynom(double x, Iterable<Double> factors) {
@@ -381,7 +465,7 @@ public class NeuralNet {
 
 	private static <T> BinaryOperator<T> noCombiner() {
 		return (_, _) -> {
-			throw new RuntimeException("Not implemented");
+			throw new RuntimeException("Not combination is expected");
 		};
 	}
 
@@ -568,15 +652,15 @@ public class NeuralNet {
 								idProvider = index -> "I" + index;
 							}
 							return indexRange.stream().mapToObj(index -> new WeightedInputBrowser() {
-								
+
 								@Override
 								public Object id() {
 									return idProvider.apply(index);
 								}
-								
+
 								@Override
 								public double weight() {
-									int indexInLayer = index-indexRange.min();
+									int indexInLayer = index - indexRange.min();
 									return neuron.weights().get(indexInLayer).data().get();
 								}
 							});
@@ -678,5 +762,8 @@ public class NeuralNet {
 		IntStream stream() {
 			return IntStream.range(min, max);
 		}
+	}
+
+	record GradiatedValue(Value value, double gradient) {
 	}
 }

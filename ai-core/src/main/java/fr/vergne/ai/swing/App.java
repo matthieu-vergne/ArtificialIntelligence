@@ -20,7 +20,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -98,15 +100,24 @@ import fr.vergne.ai.utils.LambdaUtils;
 @SuppressWarnings("serial")
 public class App extends JFrame {
 
+	public static void main(String[] args) {
+		App app = new App();
+		app.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		app.pack();
+		app.setSize(840, 930);
+		app.setVisible(true);
+	}
+
 	public App() {
 		State state;
 		{
 			Random random = new Random(0);
 
+			AtomicReference<Optional<Long>> trainingBatchSize = new AtomicReference<>(Optional.empty());
 			AtomicReference<Optional<Long>> roundsLimit = new AtomicReference<>(Optional.empty());
-			AtomicLong batchSize = new AtomicLong(1);
+			AtomicLong roundsBatchSize = new AtomicLong(1);
 			AtomicReference<Double> updateStep = new AtomicReference<Double>(0.001);
-			TrainState trainState = new TrainState(roundsLimit, batchSize, updateStep);
+			TrainState trainState = new TrainState(trainingBatchSize, roundsLimit, roundsBatchSize, updateStep);
 
 			Collection<VisualDatasetState> datasetStates = List.of(//
 					new VisualDatasetState("1.0", value -> value > 0, Color.RED), //
@@ -130,7 +141,7 @@ public class App extends JFrame {
 			PlotUtils.WindowFactory windowFactory = switch (2) {
 			case 1 -> PlotUtils.createNoWindowFactory();
 			case 2 -> PlotUtils.createFixedWindowFactory(100);
-			case 3 -> PlotUtils.createSlidingWindowFactory(10);
+			case 3 -> PlotUtils.createSlidingWindowFactory(100);
 			default -> throw new IllegalArgumentException("Unexpected window factory");
 			};
 			RectangleEdge legendPosition = RectangleEdge.TOP;
@@ -198,7 +209,8 @@ public class App extends JFrame {
 				new Entry("Circle", () -> Dataset.circle(datasetState.random(), 100)), //
 				new Entry("Columns 1", () -> Dataset.columns1(datasetState.random(), 100)), //
 				new Entry("Columns 2", () -> Dataset.columns2(datasetState.random(), 100)), //
-				new Entry("Columns steep", () -> Dataset.steepColumns(datasetState.random(), 100)), //
+				new Entry("Columns steep", () -> Dataset.steepColumns(datasetState.random(), 1000),
+						() -> Dataset.steepColumns(datasetState.random(), 100)), //
 				new Entry("Moons", () -> Dataset.moons(datasetState.random(), 100, 0.1))//
 		);
 		// TODO Implement dataset import (add to candidates + autoload)
@@ -250,8 +262,12 @@ public class App extends JFrame {
 				new Entry("20x1",
 						() -> new MLP(ParameterNamer.create(), 2, List.of(20, 1),
 								(_) -> neuralNetState.random().nextDouble(-1.0, 1.0))), //
-				new Entry("4x4x4x4x1", () -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1),
-						(_) -> neuralNetState.random().nextDouble(-1.0, 1.0)))//
+				new Entry("4x4x4x4x1",
+						() -> new MLP(ParameterNamer.create(), 2, List.of(4, 4, 4, 4, 1),
+								(_) -> neuralNetState.random().nextDouble(-1.0, 1.0))), //
+				new Entry("10^10x1",
+						() -> new MLP(ParameterNamer.create(), 2, List.of(10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1),
+								(_) -> neuralNetState.random().nextDouble(-1.0, 1.0)))//
 		);
 		// TODO Implement MLP import (add to candidates + autoload) (ONNX?)
 		// TODO Implement MLP building
@@ -430,8 +446,8 @@ public class App extends JFrame {
 		};
 
 		Runnable repainter = () -> {
-			if (ctx.mlp == null || ctx.dataset == null) {
-				// Incomplete context, don't paint yet
+			if (ctx.dataset == null) {
+				// No data point, don't draw anything
 				return;
 			}
 
@@ -474,7 +490,9 @@ public class App extends JFrame {
 				renderer.setSeriesPaint(seriesIndex, color);
 			});
 
-			addContour(visualState.contourState(), visualState, plot, ctx.mlp);
+			if (ctx.mlp != null) {
+				addContour(visualState.contourState(), visualState, plot, ctx.mlp);
+			}
 
 			ChartPanel chartPanel = new ChartPanel(chart);
 
@@ -541,10 +559,12 @@ public class App extends JFrame {
 
 	private static Parts createTimePlot(TimePlotState timePlotState) {
 		XYSeriesCollection chartDataset = new XYSeriesCollection();
+		XYSeries selectSeries = new XYSeries("Select");
 		XYSeries computeSeries = new XYSeries("Compute");
 		XYSeries testSeries = new XYSeries("Test");
 		XYSeries backwardSeries = new XYSeries("Backward");
 		XYSeries updateSeries = new XYSeries("Update");
+		chartDataset.addSeries(selectSeries);
 		chartDataset.addSeries(computeSeries);
 		chartDataset.addSeries(testSeries);
 		chartDataset.addSeries(backwardSeries);
@@ -569,6 +589,8 @@ public class App extends JFrame {
 
 		PlotUtils.WindowFactory windowFactory = timePlotState.windowFactory();
 
+		PlotUtils.Window<Long, Long> selectWindow = windowFactory
+				.createLongLongWindow((round, nanos) -> selectSeries.add(round, nanos));
 		PlotUtils.Window<Long, Long> computeWindow = windowFactory
 				.createLongLongWindow((round, nanos) -> computeSeries.add(round, nanos));
 		PlotUtils.Window<Long, Long> testWindow = windowFactory
@@ -587,6 +609,7 @@ public class App extends JFrame {
 		Consumer<List<RoundResult>> lossPlotUpdater = roundResults -> {
 			roundResults.forEach(roundResult -> {
 				var seriesUpdater = seriesUpdaterFactory.apply(roundResult);
+				seriesUpdater.accept(selectWindow, RoundData::selectDuration);
 				seriesUpdater.accept(computeWindow, RoundData::computeDuration);
 				seriesUpdater.accept(testWindow, RoundData::testDuration);
 				seriesUpdater.accept(backwardWindow, RoundData::backwardDuration);
@@ -610,9 +633,16 @@ public class App extends JFrame {
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
-		JTextField batchSizeField = FieldBuilder.buildFieldFor(trainState.batchSize())//
+		JTextField roundsBatchSizeField = FieldBuilder.buildFieldFor(trainState.roundsBatchSize())//
 				.intoText(src -> Long.toString(src.get()))//
 				.as(Long::parseLong).ifIs(value -> value > 0).thenApply(AtomicLong::set)//
+				.otherwiseShow(FieldBuilder::error)//
+				.build();
+
+		JTextField trainingBatchSizeField = FieldBuilder.buildFieldFor(trainState.trainingBatchSize())//
+				.intoText(src -> src.get().map(Object::toString).orElse(""))//
+				.as(Long::parseLong).ifIs(value -> value > 0).thenApply((src, value) -> src.set(Optional.of(value)))//
+				.whenEmptyApply(src -> src.set(Optional.empty()))//
 				.otherwiseShow(FieldBuilder::error)//
 				.build();
 
@@ -632,6 +662,9 @@ public class App extends JFrame {
 				testLossLabel.setText(scientificFormat(roundResult.data().testLoss()));
 			});
 		};
+
+		JLabel trainingTotalLabel = new JLabel();
+		trainDatasetNotifier.addListener(dataset -> trainingTotalLabel.setText("/" + dataset.size()));
 
 		roundsConsumer = lossFieldUpdater.andThen(roundsConsumer);
 		JToggleButton trainButton = new JToggleButton(
@@ -653,12 +686,20 @@ public class App extends JFrame {
 			constraints.weightx = 0.0;
 			trainPanel.add(new JLabel("rounds by batch of"), constraints);
 			constraints.weightx = 1.0;
-			trainPanel.add(batchSizeField, constraints);
+			trainPanel.add(roundsBatchSizeField, constraints);
 			constraints.weightx = 0.0;
 			trainPanel.add(new JLabel("and step of"), constraints);
 			constraints.weightx = 1.0;
 			trainPanel.add(updateStepField, constraints);
 			constraints.weightx = 0.0;
+			/////////////////
+			constraints.gridy++;
+			constraints.weightx = 0.0;
+			trainPanel.add(new JLabel("Training batch:", JLabel.TRAILING), constraints);
+			constraints.weightx = 1.0;
+			trainPanel.add(trainingBatchSizeField, constraints);
+			constraints.weightx = 0.0;
+			trainPanel.add(trainingTotalLabel, constraints);
 			/////////////////
 			constraints.gridy++;
 			constraints.weightx = 0.0;
@@ -954,7 +995,7 @@ public class App extends JFrame {
 					// Wait for the stuff to stop
 				} else {
 					AtomicReference<Optional<Long>> roundsLimit = trainState.roundsLimit();
-					AtomicLong batchSize = trainState.batchSize();
+					AtomicLong roundsBatchSize = trainState.roundsBatchSize();
 					SwingUtilities.invokeLater(new Runnable() {
 						@Override
 						public void run() {
@@ -986,6 +1027,7 @@ public class App extends JFrame {
 
 						private int batchedRound = 0;
 						private final List<RoundResult> results = new LinkedList<>();
+						Random random = new Random(0);
 
 						private void computeRound() {
 							batchedRound++;
@@ -993,18 +1035,31 @@ public class App extends JFrame {
 							MLP mlp = ctx.mlp;
 							Map<List<Double>, Double> trainDataset = ctx.trainDataset;
 							Map<List<Double>, Double> testDataset = ctx.testDataset;
+							Instant selectionInstant = Instant.now();
+							// TODO Refactor batching
+							List<Entry<List<Double>, Double>> list = new ArrayList<>(trainDataset.entrySet());
+							Collections.shuffle(list, random);
+							Map<List<Double>, Double> batchDataset = list.stream()//
+									.limit(trainState.trainingBatchSize().get().orElse(Long.MAX_VALUE))//
+									.collect(toMap(Entry::getKey, Entry::getValue));
 							Instant startInstant = Instant.now();
-							Value trainLoss = mlp.computeLoss(trainDataset);
+							System.out.println("Selection: " + Duration.between(selectionInstant, startInstant));
+							Value trainLoss = mlp.computeLoss(batchDataset);
 							Instant computedInstant = Instant.now();
+							System.out.println("Computation: " + Duration.between(startInstant, computedInstant));
 							Value testLoss = mlp.computeLoss(testDataset);
 							Instant testedInstant = Instant.now();
+							System.out.println("Test: " + Duration.between(computedInstant, testedInstant));
 							trainLoss.backward();
 							Instant backwardedInstant = Instant.now();
+							System.out.println("Backward: " + Duration.between(testedInstant, backwardedInstant));
 							mlp.updateParameters(trainState.updateStep().get());
 							Instant updatedInstant = Instant.now();
+							System.out.println("Update: " + Duration.between(backwardedInstant, updatedInstant));
 							RoundData data = new RoundData(//
 									trainLoss.data().get(), //
 									testLoss.data().get(), //
+									Duration.between(selectionInstant, startInstant), //
 									Duration.between(startInstant, computedInstant), //
 									Duration.between(computedInstant, testedInstant), //
 									Duration.between(testedInstant, backwardedInstant), //
@@ -1021,8 +1076,8 @@ public class App extends JFrame {
 
 						private boolean isBatchFinished() {
 							long totalLimit = roundsLimit.get().orElse(Long.MAX_VALUE);
-							long batchLimit = batchSize.get();
-							long roundAtEndOfBatch = round - batchedRound + batchLimit;
+							long roundsBatchLimit = roundsBatchSize.get();
+							long roundAtEndOfBatch = round - batchedRound + roundsBatchLimit;
 							return round >= Math.min(totalLimit, roundAtEndOfBatch);
 						}
 
@@ -1095,8 +1150,8 @@ public class App extends JFrame {
 		}
 	}
 
-	record RoundData(double trainLoss, double testLoss, Duration computeDuration, Duration testDuration,
-			Duration backwardDuration, Duration updateDuration) {
+	record RoundData(double trainLoss, double testLoss, Duration selectDuration, Duration computeDuration,
+			Duration testDuration, Duration backwardDuration, Duration updateDuration) {
 	}
 
 	record RoundResult(long round, RoundData data) {
@@ -1161,8 +1216,9 @@ public class App extends JFrame {
 	}
 
 	record TrainState(//
+			AtomicReference<Optional<Long>> trainingBatchSize, //
 			AtomicReference<Optional<Long>> roundsLimit, //
-			AtomicLong batchSize, //
+			AtomicLong roundsBatchSize, //
 			AtomicReference<Double> updateStep//
 	) {
 	}

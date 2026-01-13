@@ -35,8 +35,7 @@ class NeuralNetTest {
 		var n = x1.mult(w1).plus(x2.mult(w2)).plus(bias).named("n");
 		var o = n.calc(Operator.TANH);
 
-		o.resetGradientsRecursively();
-		o.computeGradientsRecursivelyStartingHereAt(1.0);
+		o.backward();
 
 		assertThat(x1.data().get(), is(2.0));
 		assertThat(x2.data().get(), is(0.0));
@@ -58,8 +57,7 @@ class NeuralNetTest {
 		var n = x1.mult(w1).plus(x2.mult(w2)).plus(bias).named("n");
 		var o = n.calc(Operator.TANH);
 
-		o.resetGradientsRecursively();
-		o.computeGradientsRecursivelyStartingHereAt(1.0);
+		o.backward();
 
 		double epsilonGradient = 1e-10;
 		assertThat(x1.gradient().get(), is(closeTo(-1.5, epsilonGradient)));
@@ -79,8 +77,7 @@ class NeuralNetTest {
 		var d = a.plus(b);// and here
 		var e = c.mult(d);
 
-		e.resetGradientsRecursively();
-		e.computeGradientsRecursivelyStartingHereAt(1.0);
+		e.backward();
 
 		assertThat(a.gradient().get(), is(-3.0));
 		assertThat(b.gradient().get(), is(-8.0));

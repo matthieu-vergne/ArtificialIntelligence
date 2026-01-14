@@ -1043,19 +1043,14 @@ public class App extends JFrame {
 									.limit(trainState.trainingBatchSize().get().orElse(Long.MAX_VALUE))//
 									.collect(toMap(Entry::getKey, Entry::getValue));
 							Instant startInstant = Instant.now();
-							System.out.println("Selection: " + Duration.between(selectionInstant, startInstant));
 							Value trainLoss = mlp.computeLoss(batchDataset);
 							Instant computedInstant = Instant.now();
-							System.out.println("Computation: " + Duration.between(startInstant, computedInstant));
 							Value testLoss = mlp.computeLoss(testDataset);
 							Instant testedInstant = Instant.now();
-							System.out.println("Test: " + Duration.between(computedInstant, testedInstant));
 							trainLoss.backward();
 							Instant backwardedInstant = Instant.now();
-							System.out.println("Backward: " + Duration.between(testedInstant, backwardedInstant));
 							mlp.updateParameters(trainState.updateStep().get());
 							Instant updatedInstant = Instant.now();
-							System.out.println("Update: " + Duration.between(backwardedInstant, updatedInstant));
 							RoundData data = new RoundData(//
 									trainLoss.data().get(), //
 									testLoss.data().get(), //

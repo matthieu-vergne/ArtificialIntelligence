@@ -5,7 +5,7 @@ import static java.util.stream.Collectors.toMap;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -18,7 +18,6 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BinaryOperator;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
@@ -38,12 +37,12 @@ public class NeuralNet {
 		Instant start = Instant.now();
 		Value loss = mlp.computeLoss(Map.of(List.of(123.0, 321.0), 1.0));
 		Instant end = Instant.now();
-		System.out.println(loss + " in " + Duration.between(start, end));
+		System.out.println("Loss=" + loss + " in " + Duration.between(start, end));
 
 		Instant start2 = Instant.now();
 		loss.backward();
 		Instant end2 = Instant.now();
-		System.out.println("backward in " + Duration.between(start2, end2));
+		System.out.println("Backward in " + Duration.between(start2, end2));
 	}
 
 	public enum Operator {
@@ -129,9 +128,24 @@ public class NeuralNet {
 					restrict(operands, 1);
 
 					Value op = operands.get(0);
-					// TODO Receive value to not recompute
 					double tanh = Math.tanh(op.data().get());
 					double localGradient = 1 - tanh * tanh;
+
+					return List.of(new GradiatedValue(op, localGradient));
+				}//
+		), //
+		RELU("ReLU", // Rectified Linear Unit
+				(operands) -> {
+					restrict(operands, 1);
+					Double v = operands.get(0);
+					return v < 0 ? 0 : v;
+				}, //
+				(operands) -> {
+					restrict(operands, 1);
+
+					Value op = operands.get(0);
+					Double v = op.data().get();
+					double localGradient = v < 0 ? 0.0 : 1.0;
 
 					return List.of(new GradiatedValue(op, localGradient));
 				}//
@@ -208,30 +222,6 @@ public class NeuralNet {
 			this.gradient().accumulateAndGet(gradientDelta, (g1, g2) -> g1 + g2);
 		}
 
-		public void resetGradientsRecursively() {
-			browseTowardsInput(value -> value.setGradient(0.0));
-		}
-
-		private void browseTowardsInput(Consumer<Value> consumer) {
-			Set<Value> done = new HashSet<>();
-			List<Value> todo = List.of(this);
-			int count = 0;// TODO Remove
-			while (!todo.isEmpty()) {
-				List<Value> next = new LinkedList<>();
-				for (Value value : todo) {
-					if (done.add(value)) {
-						consumer.accept(value);
-						count++;
-						if (count % 10000 == 0) {
-							System.out.print(count + "\r");
-						}
-						next.addAll(value.operands());
-					}
-				}
-				todo = next;
-			}
-		}
-
 		public Value plus(Value that) {
 			return calc(Operator.PLUS, that);
 		}
@@ -301,29 +291,42 @@ public class NeuralNet {
 		}
 
 		public void backward() {
-			resetGradientsRecursively();
+			List<Value> topo = topologicalOrder();
 
-			Map<Value, Double> todo = Map.of(this, 1.0);
-			int count = 0;
-			while (!todo.isEmpty()) {
-				Map<Value, Double> next = new HashMap<>();
-				for (Entry<Value, Double> gradiatedValue : todo.entrySet()) {
-					Value parentValue = gradiatedValue.getKey();
-					double parentGradient = gradiatedValue.getValue();
-					parentValue.addGradient(parentGradient);
-					Operator parentOperator = parentValue.operator();
-					List<Value> parentOperands = parentValue.operands();
-					for (GradiatedValue gradiatedParentOperand : parentOperator.resolveGradients(parentOperands)) {
-						Value parentOperand = gradiatedParentOperand.value();
-						double localGradient = gradiatedParentOperand.gradient();
-						double operandGradient = parentGradient * localGradient;
-						next.compute(parentOperand, (_, v) -> (v == null ? 0 : v) + operandGradient);
+			for (Value value : topo.reversed()) {
+				value.setGradient(0.0);
+			}
+
+			this.addGradient(1.0);
+			for (Value parentValue : topo.reversed()) {
+				double parentGradient = parentValue.gradient().get();
+				Operator parentOperator = parentValue.operator();
+				List<Value> parentOperands = parentValue.operands();
+				for (GradiatedValue gradiatedParentOperand : parentOperator.resolveGradients(parentOperands)) {
+					Value parentOperand = gradiatedParentOperand.value();
+					double localGradient = gradiatedParentOperand.gradient();
+					double operandGradient = parentGradient * localGradient;
+					parentOperand.addGradient(operandGradient);
+				}
+			}
+		}
+
+		private List<Value> topologicalOrder() {
+			List<Value> topo = new LinkedList<>();
+			Set<Value> visited = new HashSet<>();
+			Deque<Value> queue = new LinkedList<>();
+			queue.add(this);
+			while (!queue.isEmpty()) {
+				Value value = queue.removeFirst();
+				if (visited.add(value)) {
+					topo.addFirst(value);
+					for (Value child : value.operands()) {
+						queue.addLast(child);
 					}
 				}
-				todo = next;
-				count++;
-				System.out.println(count + " = " + next.size());
 			}
+
+			return topo;
 		}
 	}
 

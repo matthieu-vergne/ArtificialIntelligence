@@ -1,6 +1,6 @@
 package fr.vergne.ai.neuralnet;
 
-import static java.util.stream.Collectors.toMap;
+import static java.util.stream.Collectors.joining;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -12,7 +12,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
@@ -52,14 +51,24 @@ public class NeuralNet {
 				}, //
 				(operands) -> {
 					restrict(operands, 0);// Nothing to resolve
-					return Collections.emptyList();
+					return Stream.empty();
 				}//
 		), //
 
 		PLUS("+", //
+				(operands) -> {
+					restrict(operands, 2);
+					return operands.stream().mapToDouble(d -> d).sum();
+				}, //
+				(operands) -> {
+					restrict(operands, 2);
+					return operands.stream().map(operand -> new GradiatedValue(operand, 1.0));
+				}//
+		), //
+		SUM("sum", //
 				(operands) -> operands.stream().mapToDouble(d -> d).sum(), //
 				(operands) -> {
-					return operands.stream().map(operand -> new GradiatedValue(operand, 1.0)).toList();
+					return operands.stream().map(operand -> new GradiatedValue(operand, 1.0)).parallel();
 				}//
 		), //
 		MINUS("-", //
@@ -68,7 +77,8 @@ public class NeuralNet {
 					return operands.get(0) - operands.get(1);
 				}, //
 				(operands) -> {
-					return operands.stream().map(operand -> new GradiatedValue(operand, 1.0)).toList();
+					restrict(operands, 2);
+					return operands.stream().map(operand -> new GradiatedValue(operand, 1.0));
 				}//
 		), //
 		MULT("*", //
@@ -82,7 +92,7 @@ public class NeuralNet {
 					Double localGradient1 = op2.data().get();
 					Double localGradient2 = op1.data().get();
 
-					return List.of(new GradiatedValue(op1, localGradient1), new GradiatedValue(op2, localGradient2));
+					return Stream.of(new GradiatedValue(op1, localGradient1), new GradiatedValue(op2, localGradient2));
 				}//
 		), //
 		POW("^", //
@@ -101,7 +111,7 @@ public class NeuralNet {
 
 					double localGradient1 = v2 * Math.pow(v1, v2 - 1);
 
-					return List.of(new GradiatedValue(op1, localGradient1));
+					return Stream.of(new GradiatedValue(op1, localGradient1));
 				}//
 		), //
 		EXP("exp", //
@@ -116,7 +126,7 @@ public class NeuralNet {
 					Double v = op.data().get();
 					double localGradient = Math.exp(v);
 
-					return List.of(new GradiatedValue(op, localGradient));
+					return Stream.of(new GradiatedValue(op, localGradient));
 				}//
 		), //
 		TANH("tanh", //
@@ -131,7 +141,7 @@ public class NeuralNet {
 					double tanh = Math.tanh(op.data().get());
 					double localGradient = 1 - tanh * tanh;
 
-					return List.of(new GradiatedValue(op, localGradient));
+					return Stream.of(new GradiatedValue(op, localGradient));
 				}//
 		), //
 		RELU("ReLU", // Rectified Linear Unit
@@ -147,16 +157,16 @@ public class NeuralNet {
 					Double v = op.data().get();
 					double localGradient = v < 0 ? 0.0 : 1.0;
 
-					return List.of(new GradiatedValue(op, localGradient));
+					return Stream.of(new GradiatedValue(op, localGradient));
 				}//
 		);
 
 		private final String label;
 		private final Function<List<Double>, Double> computer;
-		private final Function<List<Value>, List<GradiatedValue>> gradientResolver;
+		private final Function<List<Value>, Stream<GradiatedValue>> gradientResolver;
 
 		Operator(String label, Function<List<Double>, Double> computer,
-				Function<List<Value>, List<GradiatedValue>> gradientResolver) {
+				Function<List<Value>, Stream<GradiatedValue>> gradientResolver) {
 			this.label = label;
 			this.computer = computer;
 			this.gradientResolver = gradientResolver;
@@ -166,7 +176,7 @@ public class NeuralNet {
 			return computer.apply(operands);
 		}
 
-		public List<GradiatedValue> resolveGradients(List<Value> operands) {
+		public Stream<GradiatedValue> resolveGradients(List<Value> operands) {
 			return gradientResolver.apply(operands);
 		}
 
@@ -281,6 +291,18 @@ public class NeuralNet {
 					List.of(this, that), new AtomicReference<>());
 		}
 
+		public static Value calc(Operator operator, Stream<Value> operands) {
+			return calc(operator, operands.toList());
+		}
+
+		public static Value calc(Operator operator, List<Value> operands) {
+			List<Double> operandsValues = operands.stream().map(Value::data).map(AtomicReference::get).toList();
+			Double computed = operator.compute(operandsValues);
+			AtomicReference<Double> data = new AtomicReference<>(computed);
+			String operandsString = operandsValues.stream().map(Object::toString).collect(joining(", ", "(", ")"));
+			return new Value(operator + operandsString, data, operator, operands, new AtomicReference<>());
+		}
+
 		@Override
 		public final String toString() {
 			return label;
@@ -302,12 +324,12 @@ public class NeuralNet {
 				double parentGradient = parentValue.gradient().get();
 				Operator parentOperator = parentValue.operator();
 				List<Value> parentOperands = parentValue.operands();
-				for (GradiatedValue gradiatedParentOperand : parentOperator.resolveGradients(parentOperands)) {
+				parentOperator.resolveGradients(parentOperands).forEach(gradiatedParentOperand -> {
 					Value parentOperand = gradiatedParentOperand.value();
 					double localGradient = gradiatedParentOperand.gradient();
 					double operandGradient = parentGradient * localGradient;
 					parentOperand.addGradient(operandGradient);
-				}
+				});
 			}
 		}
 
@@ -343,11 +365,10 @@ public class NeuralNet {
 			return weights.get(index);
 		}
 
-		public Value compute(List<Value> x) {
-			Value dotProduct = IntStream.range(0, x.size())//
-					.mapToObj(i -> weights.get(i).mult(x.get(i)))//
-					.reduce(Value.of(0), Value::plus);
-			Value activity = dotProduct.plus(bias);
+		public Value compute(List<Value> input) {
+			Stream<Value> weightedInput = IntStream.range(0, input.size())//
+					.mapToObj(i -> weights.get(i).mult(input.get(i)));
+			Value activity = Value.calc(Operator.SUM, Stream.concat(weightedInput, Stream.of(bias)));
 			return activity.calc(Operator.TANH);
 		}
 
@@ -416,23 +437,22 @@ public class NeuralNet {
 		}
 
 		public Value computeLoss(Map<List<Double>, Double> dataset) {
-			Map<Value, Double> results = dataset.entrySet().stream().collect(toMap(//
-					datapoint -> this.compute(datapoint.getKey().stream().map(Value::of).toList()).get(0), //
-					datapoint -> datapoint.getValue()//
-			));
-			Value loss = Value.of(0);
+			List<Value> localLosses = dataset.entrySet().stream().parallel().map(datapoint -> {
+				List<Double> input = datapoint.getKey();
+				Value prediction = compute(input.stream().map(Value::of).toList()).get(0);
 
-			// Sum individual losses
-			for (Entry<Value, Double> entry : results.entrySet()) {
-				Value prediction = entry.getKey();
-				Double target = entry.getValue();
+				Double target = datapoint.getValue();
+
+				// Loss = square difference
 				Value localLoss = prediction.minus(target).pow(2);
-				loss = loss.plus(localLoss);
-			}
+
+				return localLoss;
+			}).toList();
+			Value loss = Value.calc(Operator.SUM, localLosses);
 
 			// Normalize over dataset size
 			// Keep comparable loss for batching, testing, etc.
-			loss = loss.div(results.size());
+			loss = loss.div(dataset.size());
 
 			return loss;
 		}
